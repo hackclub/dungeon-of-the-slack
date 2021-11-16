@@ -1,6 +1,7 @@
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 module Slack
   ( connect
@@ -11,7 +12,7 @@ import           Relude                  hiding ( error
                                                 )
 
 import           Control.Lens
-import           Data.Aeson                     ( FromJSON )
+import           Data.Aeson
 import           Network.Wreq
 
 import           Text.Megaparsec
@@ -37,6 +38,8 @@ data URL = URL
   , path :: Text
   }
 
+-- this is of course inflexible,
+-- but it only has to handle what slack responds with
 parseURL :: Parser URL
 parseURL = do
   _     <- string "wss://"
@@ -46,10 +49,23 @@ parseURL = do
   return URL { host = host', path = fromString path' }
 
 
+data SlackMessage = Hello | SlashCommand | Unknown deriving Show
+
+instance FromJSON SlackMessage where
+  parseJSON = withObject "SlackMessage" $ \v -> do
+    typeName :: Text <- v .: "type"
+    return $ case typeName of
+      "hello"          -> Hello
+      "slash_commands" -> SlashCommand
+      _                -> Unknown
+
 wsClient :: ClientApp ()
 wsClient conn = do
   putStrLn "Connected!"
-  forever $ receiveData conn >>= liftIO . putTextLn
+  forever $ receiveData conn >>= \msg -> do
+    liftIO $ case (decode . encodeUtf8) (msg :: Text) of
+      Nothing -> void . die $ "Failed to parse JSON"
+      Just s  -> print (s :: SlackMessage)
 
 
 connect :: Text -> Text -> IO ()
