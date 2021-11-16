@@ -24,7 +24,6 @@ library
     , lens
     , megaparsec
     , relude
-    , text
     , websockets
     , wreq
     , wuss
@@ -43,7 +42,6 @@ executable hcrl
     , lens
     , megaparsec
     , relude
-    , text
     , websockets
     , wreq
     , wuss
