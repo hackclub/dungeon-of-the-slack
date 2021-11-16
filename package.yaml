@@ -5,9 +5,11 @@ dependencies:
 
   - aeson
   - lens
-  - modern-uri
+  - megaparsec
+  - text
   - websockets
   - wreq
+  - wuss
 library:
   source-dirs: .
   exposed-modules: Slack
