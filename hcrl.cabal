@@ -1,0 +1,44 @@
+cabal-version: 1.12
+
+-- This file has been generated from package.yaml by hpack version 0.34.4.
+--
+-- see: https://github.com/sol/hpack
+
+name:           hcrl
+version:        0.0.0
+build-type:     Simple
+
+library
+  exposed-modules:
+      Slack
+  other-modules:
+      Main
+      Paths_hcrl
+  hs-source-dirs:
+      ./
+  build-depends:
+      aeson
+    , base >=4.14 && <5
+    , lens
+    , modern-uri
+    , relude
+    , websockets
+    , wreq
+  default-language: Haskell2010
+
+executable hcrl
+  main-is: Main.hs
+  other-modules:
+      Slack
+      Paths_hcrl
+  hs-source-dirs:
+      ./
+  build-depends:
+      aeson
+    , base >=4.14 && <5
+    , lens
+    , modern-uri
+    , relude
+    , websockets
+    , wreq
+  default-language: Haskell2010

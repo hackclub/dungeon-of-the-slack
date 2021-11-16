@@ -1,0 +1,16 @@
+name: hcrl
+dependencies:
+  - base >= 4.14 && < 5
+  - relude
+
+  - aeson
+  - lens
+  - modern-uri
+  - websockets
+  - wreq
+library:
+  source-dirs: .
+  exposed-modules: Slack
+executable:
+  main: Main.hs
+  source-dirs: .
