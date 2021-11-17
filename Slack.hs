@@ -16,7 +16,6 @@ import           Relude                  hiding ( error
 
 import           Control.Lens            hiding ( (.=) )
 import           Data.Aeson
-import           Data.Maybe
 import           Network.Wreq
 
 import           Text.Megaparsec
@@ -112,10 +111,7 @@ wsClient handleMsg conn = do
             res <- handleMsg (content se)
             sendTextData
               conn
-              (encode $ SocketEventRes { outEnvId   = fromJust . inEnvId $ se
-                                       , resContent = res
-                                       }
-              )
+              (encode $ SocketEventRes { outEnvId = id_, resContent = res })
 
 
 wsConnect :: Text -> EventHandler -> IO ()
