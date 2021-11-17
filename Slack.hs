@@ -57,17 +57,19 @@ data SocketEvent = SocketEvent
   , content :: SocketEventContent
   }
   deriving Show
-data SocketEventContent = Hello | SlashCommand | Unknown deriving Show
+data SocketEventContent = Hello | SlashCommand {scText :: Text} | Unknown deriving Show
 
 instance FromJSON SocketEvent where
   parseJSON = withObject "SlackMessage" $ \v -> do
     typeName :: Text <- v .: "type"
-    let smContent =
-          (case typeName of
-            "hello"          -> Hello
-            "slash_commands" -> SlashCommand
-            _                -> Unknown
-          )
+    smContent        <-
+      (case typeName of
+        "hello"          -> return Hello
+        "slash_commands" -> do
+          text <- (v .: "payload") >>= (.: "text")
+          return $ SlashCommand { scText = text }
+        _ -> return Unknown
+      )
 
     envId' :: Maybe Text <- v .:? "envelope_id"
     return $ SocketEvent envId' smContent

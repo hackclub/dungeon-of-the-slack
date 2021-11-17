@@ -15,8 +15,8 @@ handleMsg :: EventHandler
 handleMsg msg = do
   putStrLn $ "Message from socket: " <> show msg
   case msg of
-    SlashCommand ->
-      return $ SlashCommandRes { scrText = "Received!", scrInChannel = True }
+    SlashCommand t -> return
+      $ SlashCommandRes { scrText = "Received: " <> t, scrInChannel = True }
     _ -> die $ "Can't handle event: " <> show msg
 
 
