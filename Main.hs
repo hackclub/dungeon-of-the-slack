@@ -14,7 +14,10 @@ import           System.Environment
 handleMsg :: EventHandler
 handleMsg msg = do
   putStrLn $ "Message from socket: " <> show msg
-  return "Received"
+  case msg of
+    SlashCommand ->
+      return $ SlashCommandRes { scrText = "Received!", scrInChannel = True }
+    _ -> die $ "Can't handle event: " <> show msg
 
 
 main :: IO ()

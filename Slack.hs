@@ -6,7 +6,8 @@
 module Slack
   ( wsConnect
   , EventHandler
-  , SocketEvent(..)
+  , SocketEventContent(..)
+  , SocketEventResContent(..)
   ) where
 
 import           Relude                  hiding ( error
@@ -15,6 +16,7 @@ import           Relude                  hiding ( error
 
 import           Control.Lens            hiding ( (.=) )
 import           Data.Aeson
+import           Data.Maybe
 import           Network.Wreq
 
 import           Text.Megaparsec
@@ -73,17 +75,29 @@ instance FromJSON SocketEvent where
 
 
 data SocketEventRes = SocketEventRes
-  { outEnvId :: Text
-  , resText  :: Text
+  { outEnvId   :: Text
+  , resContent :: SocketEventResContent
+  }
+data SocketEventResContent = SlashCommandRes
+  { scrText      :: Text
+  , scrInChannel :: Bool
   }
 
 instance ToJSON SocketEventRes where
   toJSON om = object
-    ["envelope_id" .= outEnvId om, "payload" .= object ["text" .= resText om]]
+    [ "envelope_id" .= outEnvId om
+    , "payload" .= object
+      [ "text" .= (scrText . resContent) om
+      , "response_type"
+        .= (if (scrInChannel . resContent) om
+             then "in_channel"
+             else "ephemeral" :: Text
+           )
+      ]
+    ]
 
 
--- returns response text; this probably only applies to slash cmds
-type EventHandler = SocketEvent -> IO Text
+type EventHandler = SocketEventContent -> IO SocketEventResContent
 
 wsClient :: EventHandler -> ClientApp ()
 wsClient handleMsg conn = do
@@ -95,10 +109,13 @@ wsClient handleMsg conn = do
         case inEnvId se of
           Nothing  -> return ()
           Just id_ -> do
-            text <- handleMsg se
+            res <- handleMsg (content se)
             sendTextData
               conn
-              (encode SocketEventRes { outEnvId = id_, resText = text })
+              (encode $ SocketEventRes { outEnvId   = fromJust . inEnvId $ se
+                                       , resContent = res
+                                       }
+              )
 
 
 wsConnect :: Text -> EventHandler -> IO ()
