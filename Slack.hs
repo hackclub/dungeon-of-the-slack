@@ -8,9 +8,14 @@ module Slack
   , EventHandler
   , SocketEventContent(..)
   , SocketEventResContent(..)
+  , getChannelId
+  , sendMessage
   ) where
 
+import           Prelude                        ( head )
 import           Relude                  hiding ( error
+                                                , get
+                                                , head
                                                 , many
                                                 )
 
@@ -18,11 +23,15 @@ import           Control.Lens            hiding ( (.=) )
 import           Data.Aeson
 import           Network.Wreq
 
-import           Text.Megaparsec
+import           Text.Megaparsec         hiding ( token )
 import           Text.Megaparsec.Char
 
 import           Network.WebSockets
 import           Wuss
+
+
+-- WebSocket connection
+-----------------------
 
 
 data GetURLResponse = GetURLResponse
@@ -139,3 +148,51 @@ wsConnect wsToken handle = do
                                  443
                                  (toString . path $ u)
                                  (wsClient handle)
+
+
+-- HTTP requests
+----------------
+
+
+newtype ChannelList = ChannelList { channels :: [Channel] }
+instance FromJSON ChannelList where
+  parseJSON =
+    withObject "ChannelList" $ (return . ChannelList) <=< (.: "channels")
+
+data Channel = Channel
+  { chanName :: Text
+  , chanId   :: Text
+  }
+instance FromJSON Channel where
+  parseJSON = withObject "Channel" $ \v -> do
+    chanName' <- v .: "name"
+    chanId'   <- v .: "id"
+    return $ Channel { chanName = chanName', chanId = chanId' }
+
+getChannelId :: Text -> Text -> IO Text
+getChannelId token name = do
+  chanListRes <- getWith
+    (  defaults
+    &  header "Authorization"
+    .~ ["Bearer " <> encodeUtf8 token]
+    &  param "limit"
+    .~ ["1000"]
+    &  param "types"
+    .~ ["public_channel", "private_channel"]
+    )
+    "https://slack.com/api/conversations.list"
+  case eitherDecode (chanListRes ^. responseBody) of
+    Left e ->
+      die
+        $  "Failed to parse JSON for conversation list: "
+        <> e
+        <> "\n"
+        <> decodeUtf8 (chanListRes ^. responseBody)
+    Right cl ->
+      return . chanId . head . filter ((== name) . chanName) . channels $ cl
+
+
+sendMessage :: Text -> Text -> Text -> IO ()
+sendMessage token channelId msgContent = do
+  void $ post "https://slack.com/api/chat.postMessage"
+              ["token" := token, "channel" := channelId, "text" := msgContent]
