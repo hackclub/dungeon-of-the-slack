@@ -12,6 +12,7 @@ dependencies:
   - fixed-vector
   - lens
   - megaparsec
+  - random
 library:
   source-dirs: .
   exposed-modules:

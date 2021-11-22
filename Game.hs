@@ -18,6 +18,7 @@ import           Utils                          ( compose )
 import           Control.Lens
 import qualified Data.Vector.Fixed             as Vec
 import           Data.Vector.Fixed.Boxed        ( Vec )
+import           System.Random
 
 
 newtype Grid a = Grid { gridVec :: Vec 18 (Vec 18 a) }
@@ -47,12 +48,17 @@ data Entity = Entity
   , entityY :: Int
   }
 
-newtype GameState = GameState
-  { entities :: [Entity]
+data GameState = GameState
+  { gsRNG    :: StdGen
+  , entities :: [Entity]
   }
 
-mkGameState :: GameState
-mkGameState = GameState [Entity 0 0] -- TODO placeholder
+mkGameState :: IO GameState
+mkGameState = do
+  rng <- getStdGen
+  let (entityX', rng')  = randomR (0 :: Int, 17) rng
+  let (entityY', rng'') = randomR (0 :: Int, 17) rng'
+  return $ GameState { gsRNG = rng'', entities = [Entity entityX' entityY'] }
 
 
 -- currently an out-of-bounds entity will just not appear

@@ -27,6 +27,7 @@ library
     , fixed-vector
     , lens
     , megaparsec
+    , random
     , relude
     , websockets
     , wreq
@@ -49,6 +50,7 @@ executable hcrl
     , fixed-vector
     , lens
     , megaparsec
+    , random
     , relude
     , websockets
     , wreq

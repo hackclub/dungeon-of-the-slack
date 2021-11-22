@@ -53,7 +53,8 @@ main = do
       void . forkIO $ wsConnect wst handleMsg
       channelId <- getChannelId at cn
 
-      gameLoop mkGameState at channelId
+      initGS    <- mkGameState
+      gameLoop initGS at channelId
     _ ->
       void
         .  die
