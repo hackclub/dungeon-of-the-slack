@@ -32,8 +32,8 @@ g2l = Vec.toList . Vec.map Vec.toList . gridVec
 l2g :: [[a]] -> Grid a
 l2g = Grid . Vec.fromList . map Vec.fromList
 
-gset :: Int -> Int -> a -> Grid a -> Maybe (Grid a)
-gset x y e = Just . l2g . over (ix y) (& ix x .~ e) . g2l
+gset :: Int -> Int -> a -> Grid a -> Grid a
+gset x y e = l2g . over (ix y) (& ix x .~ e) . g2l
 
 
 type EntityGrid = Grid (Maybe Entity)
@@ -55,15 +55,11 @@ mkGameState :: GameState
 mkGameState = GameState [Entity 0 0] -- TODO placeholder
 
 
+-- currently an out-of-bounds entity will just not appear
+-- this is bc gset uses ix
 getGrid :: GameState -> EntityGrid
-getGrid =
-  -- TODO this is bad!
-  -- an out-of-bounds entity will just empty the grid
-  fromMaybe mkEntityGrid
-    . flip compose (Just mkEntityGrid)
-    . map setEntity
-    . entities
-  where setEntity e = (=<<) $ gset (entityX e) (entityY e) (Just e)
+getGrid = flip compose mkEntityGrid . map setEntity . entities
+  where setEntity e = gset (entityX e) (entityY e) (Just e)
 
 
 executeStep :: GameState -> GameState
