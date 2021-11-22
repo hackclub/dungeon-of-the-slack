@@ -7,9 +7,11 @@ module Main
 
 import           Relude
 
+import           Game
+import           Slack
+
 import           Control.Concurrent
 import           Control.Time
-import           Slack
 import           System.Environment
 
 
@@ -22,12 +24,23 @@ handleMsg msg = do
     _ -> die $ "Can't handle event: " <> show msg
 
 
-gameLoop :: Text -> Text -> IO ()
-gameLoop token channelId = do
+-- this is in Main for the sake of modularity
+renderGrid :: EntityGrid -> Text
+renderGrid = fromString . intercalate "\n" . g2l . fmap renderEntity
+ where
+  renderEntity e = case e of
+    Just _  -> '&'
+    Nothing -> '.'
+
+gameLoop :: GameState -> Text -> Text -> IO ()
+gameLoop gameState token channelId = do
   delay (5 :: Natural)
     -- meaning depends on type; (5 :: Natural) is 5 seconds
-  sendMessage token channelId "Five seconds have passed"
-  gameLoop token channelId
+
+  let (grid, newState) = runState (step renderGrid) gameState
+  sendMessage token channelId ("```\n" <> grid <> "\n```")
+
+  gameLoop newState token channelId
 
 
 main :: IO ()
@@ -39,7 +52,8 @@ main = do
     [Just at, Just wst, Just cn] -> do
       void . forkIO $ wsConnect wst handleMsg
       channelId <- getChannelId at cn
-      gameLoop at channelId
+
+      gameLoop mkGameState at channelId
     _ ->
       void
         .  die

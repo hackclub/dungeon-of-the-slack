@@ -12,9 +12,11 @@ build-type:     Simple
 
 library
   exposed-modules:
+      Game
       Slack
   other-modules:
       Main
+      Utils
       Paths_hcrl
   hs-source-dirs:
       ./
@@ -22,6 +24,7 @@ library
       aeson
     , base >=4.14 && <5
     , delay
+    , fixed-vector
     , lens
     , megaparsec
     , relude
@@ -33,7 +36,9 @@ library
 executable hcrl
   main-is: Main.hs
   other-modules:
+      Game
       Slack
+      Utils
       Paths_hcrl
   hs-source-dirs:
       ./
@@ -41,6 +46,7 @@ executable hcrl
       aeson
     , base >=4.14 && <5
     , delay
+    , fixed-vector
     , lens
     , megaparsec
     , relude
