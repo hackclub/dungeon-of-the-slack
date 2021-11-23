@@ -16,12 +16,20 @@ import           Control.Time
 import           System.Environment
 
 
-handleMsg :: EventHandler
-handleMsg msg = do
+handleMsg :: IORef GameState -> EventHandler
+handleMsg gsRef msg = do
   putStrLn $ "Message from socket: " <> show msg
   case msg of
-    SlashCommand t -> return
-      $ SlashCommandRes { scrText = "Received: " <> t, scrInChannel = True }
+    SlashCommand t -> do
+      let cmd = case t of
+            "n" -> North
+            "e" -> East
+            "s" -> South
+            "w" -> West
+            _   -> Noop
+      modifyIORef gsRef $ setCommand cmd
+      return
+        $ SlashCommandRes { scrText = "Received: " <> t, scrInChannel = True }
     _ -> die $ "Can't handle event: " <> show msg
 
 
@@ -33,15 +41,17 @@ renderGrid = fromString . intercalate "\n" . g2l . fmap renderEntity
     Just _  -> '&'
     Nothing -> '.'
 
-gameLoop :: GameState -> Text -> Text -> IO ()
-gameLoop gameState token channelId = do
+gameLoop :: IORef GameState -> Text -> Text -> IO ()
+gameLoop gsRef token channelId = do
   delay (5 :: Natural)
     -- meaning depends on type; (5 :: Natural) is 5 seconds
 
+  gameState <- readIORef gsRef
   let (grid, newState) = runState (step renderGrid) gameState
+  writeIORef gsRef newState
   sendMessage token channelId ("```\n" <> grid <> "\n```")
 
-  gameLoop newState token channelId
+  gameLoop gsRef token channelId
 
 
 main :: IO ()
@@ -51,11 +61,12 @@ main = do
 
   case map (fmap fromString) envVars of
     [Just at, Just wst, Just cn] -> do
-      void . forkIO $ wsConnect wst handleMsg
+      gsRef <- mkGameState Noop >>= newIORef
+
+      void . forkIO $ wsConnect wst (handleMsg gsRef)
       channelId <- getChannelId at cn
 
-      initGS    <- mkGameState
-      gameLoop initGS at channelId
+      gameLoop gsRef at channelId
     _ ->
       void
         .  die

@@ -6,7 +6,9 @@ module Game
   ( mkEntityGrid
   , mkGameState
   , EntityGrid
+  , Command(..)
   , GameState
+  , setCommand
   , step
   ) where
 
@@ -38,46 +40,58 @@ mkEntityGrid :: EntityGrid
 mkEntityGrid = Grid . Vec.replicate . Vec.replicate $ Nothing
 
 
+data Command = Noop | North | East | South | West
+
+
 data GameState = GameState
   { gameRNG   :: StdGen
   , _entities :: [Entity]
+  , _command  :: Command
   }
 
 makeLenses ''GameState
 
-mkGameState :: IO GameState
-mkGameState = do
+mkGameState :: Command -> IO GameState
+mkGameState cmd = do
   rngX <- getStdGen
   let (x, rngY) = randomCoord rngX
   let (y, rng)  = randomCoord rngY
 
   return $ GameState { gameRNG   = rng
                      , _entities = [Entity x y [CanMove, IsPlayer]]
+                     , _command  = cmd
                      }
   where randomCoord = randomR (0 :: Int, 17)
+
+setCommand :: Command -> GameState -> GameState
+setCommand = set command
 
 
 data System = System
   { componentSet :: Set Component
-  , everyTick    :: Entity -> GameState -> GameState
+  , everyTick    :: Command -> Entity -> GameState -> GameState
   }
 
 -- runs a system's everyTick over all entities
 runSystemET :: System -> GameState -> GameState
-runSystemET s gs = (foldl' (.) id . map (everyTick s))
-  (filter (flip Set.isSubsetOf (componentSet s) . (^. components))
-          (gs ^. entities)
-  )
+runSystemET s gs = (foldl' (.) id . map (everyTick s $ gs ^. command))
+  (filter (Set.isSubsetOf (componentSet s) . (^. components)) (gs ^. entities))
   gs
 
 systems :: [System]
 systems =
   [ -- move player
     System { componentSet = [CanMove, IsPlayer]
-           -- TODO placeholder until commands work
-           , everyTick    = \e -> over entities $ replace e (over posX (+ 1) e)
+           , everyTick = \c e -> over entities $ replace e (fromMoveCommand c e)
            }
   ]
+ where
+  fromMoveCommand c = case c of
+    North -> over posY (subtract 1)
+    East  -> over posX (+ 1)
+    South -> over posY (+ 1)
+    West  -> over posX (subtract 1)
+    _     -> id
 
 
 -- currently an out-of-bounds entity will just not appear
