@@ -1,6 +1,5 @@
-{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE NoImplicitPrelude #-}
--- {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE OverloadedLists #-}
 {-# LANGUAGE TemplateHaskell #-}
 
 module Game
@@ -52,10 +51,10 @@ mkGameState = do
   let (x, rngY) = randomCoord rngX
   let (y, rng)  = randomCoord rngY
 
-  return $ GameState { gameRNG = rng, _entities = [Entity x y playerComps] }
- where
-  randomCoord = randomR (0 :: Int, 17)
-  playerComps = Set.fromList [CanMove, IsPlayer]
+  return $ GameState { gameRNG   = rng
+                     , _entities = [Entity x y [CanMove, IsPlayer]]
+                     }
+  where randomCoord = randomR (0 :: Int, 17)
 
 
 data System = System
@@ -71,11 +70,11 @@ runSystemET s gs = (foldl' (.) id . map (everyTick s))
   )
   gs
 
-
 systems :: [System]
 systems =
   [ -- move player
-    System { componentSet = Set.fromList [CanMove, IsPlayer]
+    System { componentSet = [CanMove, IsPlayer]
+           -- TODO placeholder until commands work
            , everyTick    = \e -> over entities $ replace e (over posX (+ 1) e)
            }
   ]
