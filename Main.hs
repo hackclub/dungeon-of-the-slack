@@ -9,6 +9,7 @@ import           Relude
 
 import           Game
 import           Slack
+import           Utils                          ( g2l )
 
 import           Control.Concurrent
 import           Control.Time

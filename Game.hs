@@ -1,10 +1,10 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 -- {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TemplateHaskell #-}
 
 module Game
-  ( g2l
-  , mkEntityGrid
+  ( mkEntityGrid
   , mkGameState
   , EntityGrid
   , GameState
@@ -13,28 +13,24 @@ module Game
 
 import           Relude
 
-import           Utils                          ( compose )
+import           Utils
 
 import           Control.Lens
+import qualified Data.Set                      as Set
 import qualified Data.Vector.Fixed             as Vec
-import           Data.Vector.Fixed.Boxed        ( Vec )
 import           System.Random
 
 
-newtype Grid a = Grid { gridVec :: Vec 18 (Vec 18 a) }
+data Component = CanMove | IsPlayer deriving (Eq, Ord)
 
-instance Functor Grid where
-  fmap f = Grid . (Vec.map . Vec.map) f . gridVec
+data Entity = Entity
+  { _posX       :: Int
+  , _posY       :: Int
+  , _components :: Set Component
+  }
+  deriving Eq
 
--- maybe this should be some typeclass instance
-g2l :: Grid a -> [[a]]
-g2l = Vec.toList . Vec.map Vec.toList . gridVec
-
-l2g :: [[a]] -> Grid a
-l2g = Grid . Vec.fromList . map Vec.fromList
-
-gset :: Int -> Int -> a -> Grid a -> Grid a
-gset x y e = l2g . over (ix y) (& ix x .~ e) . g2l
+makeLenses ''Entity
 
 
 type EntityGrid = Grid (Maybe Entity)
@@ -43,33 +39,57 @@ mkEntityGrid :: EntityGrid
 mkEntityGrid = Grid . Vec.replicate . Vec.replicate $ Nothing
 
 
-data Entity = Entity
-  { entityX :: Int
-  , entityY :: Int
+data GameState = GameState
+  { gameRNG   :: StdGen
+  , _entities :: [Entity]
   }
 
-data GameState = GameState
-  { gsRNG    :: StdGen
-  , entities :: [Entity]
-  }
+makeLenses ''GameState
 
 mkGameState :: IO GameState
 mkGameState = do
-  rng <- getStdGen
-  let (entityX', rng')  = randomR (0 :: Int, 17) rng
-  let (entityY', rng'') = randomR (0 :: Int, 17) rng'
-  return $ GameState { gsRNG = rng'', entities = [Entity entityX' entityY'] }
+  rngX <- getStdGen
+  let (x, rngY) = randomCoord rngX
+  let (y, rng)  = randomCoord rngY
+
+  return $ GameState { gameRNG = rng, _entities = [Entity x y playerComps] }
+ where
+  randomCoord = randomR (0 :: Int, 17)
+  playerComps = Set.fromList [CanMove, IsPlayer]
+
+
+data System = System
+  { componentSet :: Set Component
+  , everyTick    :: Entity -> GameState -> GameState
+  }
+
+-- runs a system's everyTick over all entities
+runSystemET :: System -> GameState -> GameState
+runSystemET s gs = (foldl' (.) id . map (everyTick s))
+  (filter (flip Set.isSubsetOf (componentSet s) . (^. components))
+          (gs ^. entities)
+  )
+  gs
+
+
+systems :: [System]
+systems =
+  [ -- move player
+    System { componentSet = Set.fromList [CanMove, IsPlayer]
+           , everyTick    = \e -> over entities $ replace e (over posX (+ 1) e)
+           }
+  ]
 
 
 -- currently an out-of-bounds entity will just not appear
 -- this is bc gset uses ix
 getGrid :: GameState -> EntityGrid
-getGrid = flip compose mkEntityGrid . map setEntity . entities
-  where setEntity e = gset (entityX e) (entityY e) (Just e)
+getGrid = flip compose mkEntityGrid . map setEntity . (^. entities)
+  where setEntity e = gset (e ^. posX) (e ^. posY) (Just e)
 
 
 executeStep :: GameState -> GameState
-executeStep = id -- TODO placeholder
+executeStep = compose . map runSystemET $ systems
 
 step :: (EntityGrid -> a) -> State GameState a
 step render = do
