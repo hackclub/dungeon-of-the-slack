@@ -14,20 +14,20 @@ replace :: Eq a => a -> a -> [a] -> [a]
 replace x y = map (\o -> if o == x then y else o)
 
 
--- Grid
--------
+-- Matrix
+---------
 
-newtype Grid a = Grid { gridVec :: Vec 18 (Vec 18 a) }
+newtype Matrix a = Matrix { gridVec :: Vec 18 (Vec 18 a) }
 
-instance Functor Grid where
-  fmap f = Grid . (Vec.map . Vec.map) f . gridVec
+instance Functor Matrix where
+  fmap f = Matrix . (Vec.map . Vec.map) f . gridVec
 
 -- maybe this should be some typeclass instance
-g2l :: Grid a -> [[a]]
-g2l = Vec.toList . Vec.map Vec.toList . gridVec
+m2l :: Matrix a -> [[a]]
+m2l = Vec.toList . Vec.map Vec.toList . gridVec
 
-l2g :: [[a]] -> Grid a
-l2g = Grid . Vec.fromList . map Vec.fromList
+l2m :: [[a]] -> Matrix a
+l2m = Matrix . Vec.fromList . map Vec.fromList
 
-gset :: Int -> Int -> a -> Grid a -> Grid a
-gset x y e = l2g . over (ix y) (& ix x .~ e) . g2l
+mset :: Int -> Int -> a -> Matrix a -> Matrix a
+mset x y e = l2m . over (ix y) (& ix x .~ e) . m2l

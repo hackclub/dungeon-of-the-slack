@@ -9,12 +9,15 @@ import           Relude
 
 import           Game
 import           Slack
-import           Utils                          ( g2l )
+import           Utils                          ( m2l )
 
 import           Control.Concurrent
 import           Control.Time
 import           System.Environment
 
+
+-- `handleMsg`, `renderGrid` and `gameLoop` are in Main for the sake of
+-- modularity
 
 handleMsg :: IORef GameState -> EventHandler
 handleMsg gsRef msg = do
@@ -32,10 +35,8 @@ handleMsg gsRef msg = do
         $ SlashCommandRes { scrText = "Received: " <> t, scrInChannel = True }
     _ -> die $ "Can't handle event: " <> show msg
 
-
--- this is in Main for the sake of modularity
 renderGrid :: EntityGrid -> Text
-renderGrid = fromString . intercalate "\n" . g2l . fmap renderEntity
+renderGrid = fromString . intercalate "\n" . m2l . fmap renderEntity
  where
   renderEntity e = case e of
     Just _  -> '&'

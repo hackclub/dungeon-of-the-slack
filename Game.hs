@@ -1,6 +1,6 @@
 {-# LANGUAGE NoImplicitPrelude #-}
-{-# LANGUAGE OverloadedLists #-}
-{-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE OverloadedLists   #-}
+{-# LANGUAGE TemplateHaskell   #-}
 
 module Game
   ( mkEntityGrid
@@ -34,10 +34,10 @@ data Entity = Entity
 makeLenses ''Entity
 
 
-type EntityGrid = Grid (Maybe Entity)
+type EntityGrid = Matrix (Maybe Entity)
 
 mkEntityGrid :: EntityGrid
-mkEntityGrid = Grid . Vec.replicate . Vec.replicate $ Nothing
+mkEntityGrid = Matrix . Vec.replicate . Vec.replicate $ Nothing
 
 
 data Command = Noop | North | East | South | West
@@ -82,6 +82,7 @@ systems :: [System]
 systems =
   [ -- move player
     System { componentSet = [CanMove, IsPlayer]
+           -- TODO placeholder - should respond to commands
            , everyTick = \c e -> over entities $ replace e (fromMoveCommand c e)
            }
   ]
@@ -98,7 +99,7 @@ systems =
 -- this is bc gset uses ix
 getGrid :: GameState -> EntityGrid
 getGrid = flip compose mkEntityGrid . map setEntity . (^. entities)
-  where setEntity e = gset (e ^. posX) (e ^. posY) (Just e)
+  where setEntity e = mset (e ^. posX) (e ^. posY) (Just e)
 
 
 executeStep :: GameState -> GameState
