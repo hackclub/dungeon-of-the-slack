@@ -21,10 +21,12 @@ library
   hs-source-dirs:
       ./
   build-depends:
-      aeson
+      JuicyPixels
+    , aeson
     , base >=4.14 && <5
     , containers
     , delay
+    , file-embed
     , fixed-vector
     , lens
     , megaparsec
@@ -45,10 +47,12 @@ executable hcrl
   hs-source-dirs:
       ./
   build-depends:
-      aeson
+      JuicyPixels
+    , aeson
     , base >=4.14 && <5
     , containers
     , delay
+    , file-embed
     , fixed-vector
     , lens
     , megaparsec

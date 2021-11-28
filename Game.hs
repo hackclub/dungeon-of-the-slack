@@ -5,6 +5,7 @@
 module Game
   ( mkEntityGrid
   , mkGameState
+  , Entity
   , EntityGrid
   , Command(..)
   , GameState

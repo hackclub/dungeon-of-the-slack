@@ -7,6 +7,9 @@ dependencies:
   - wreq
   - wuss
 
+  - file-embed
+  - JuicyPixels
+
   - aeson
   - containers
   - delay

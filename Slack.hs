@@ -9,7 +9,8 @@ module Slack
   , SocketEventContent(..)
   , SocketEventResContent(..)
   , getChannelId
-  , sendMessage
+  -- , sendMessage
+  , sendMessageFile
   ) where
 
 import           Prelude                        ( head )
@@ -192,7 +193,12 @@ getChannelId token name = do
       return . chanId . head . filter ((== name) . chanName) . channels $ cl
 
 
-sendMessage :: Text -> Text -> Text -> IO ()
-sendMessage token channelId msgContent = do
-  void $ post "https://slack.com/api/chat.postMessage"
-              ["token" := token, "channel" := channelId, "text" := msgContent]
+-- sendMessage :: Text -> Text -> Text -> IO ()
+-- sendMessage token channelId msgContent = void $ post
+--   "https://slack.com/api/chat.postMessage"
+--   ["token" := token, "channel" := channelId, "text" := msgContent]
+
+sendMessageFile :: Text -> Text -> ByteString -> IO ()
+sendMessageFile token channelId msgContent = void $ post
+  "https://slack.com/api/files.upload"
+  ["token" := token, "channels" := channelId, "content" := msgContent]
