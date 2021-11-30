@@ -17,7 +17,8 @@ replace x y = map (\o -> if o == x then y else o)
 -- Matrix
 ---------
 
-newtype Matrix a = Matrix { gridVec :: Vec 18 (Vec 18 a) }
+-- yes i know hardcoding the dims here is bad
+newtype Matrix a = Matrix { gridVec :: Vec 24 (Vec 24 a) }
 
 instance Functor Matrix where
   fmap f = Matrix . (Vec.map . Vec.map) f . gridVec

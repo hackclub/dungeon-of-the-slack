@@ -9,6 +9,8 @@ module Game
   , EntityGrid
   , Command(..)
   , GameState
+  , Tile(..)
+  , represent
   , setCommand
   , step
   ) where
@@ -18,12 +20,13 @@ import           Relude
 import           Utils
 
 import           Control.Lens
+import           Data.Default
 import qualified Data.Set                      as Set
 import qualified Data.Vector.Fixed             as Vec
 import           System.Random
 
 
-data Component = CanMove | IsPlayer deriving (Eq, Ord)
+data Component = CanMove | IsPlayer | IsWall deriving (Eq, Ord)
 
 data Entity = Entity
   { _posX       :: Int
@@ -41,7 +44,7 @@ mkEntityGrid :: EntityGrid
 mkEntityGrid = Matrix . Vec.replicate . Vec.replicate $ Nothing
 
 
-data Command = Noop | North | East | South | West
+data Command = Noop | North | East | South | West deriving (Eq, Ord, Show)
 
 
 data GameState = GameState
@@ -54,24 +57,38 @@ makeLenses ''GameState
 
 mkGameState :: Command -> IO GameState
 mkGameState cmd = do
-  rngX <- getStdGen
-  let (x, rngY) = randomCoord rngX
-  let (y, rng)  = randomCoord rngY
+  rng <- getStdGen
+  let (player, rng')  = entityAtRandomPos rng [CanMove, IsPlayer]
+  let (wall, rng'')   = entityAtRandomPos rng' [IsWall]
+  let (wall', rng''') = entityAtRandomPos rng'' [IsWall]
 
-  return $ GameState { gameRNG   = rng
-                     , _entities = [Entity x y [CanMove, IsPlayer]]
+  return $ GameState { gameRNG   = rng'''
+                     , _entities = [player, wall, wall']
                      , _command  = cmd
                      }
-  where randomCoord = randomR (0 :: Int, 17)
+ where
+  randomCoord = randomR (0 :: Int, 17)
+  entityAtRandomPos rng comps =
+    let (x, rngX) = randomCoord rng
+        (y, rngY) = randomCoord rngX
+    in  (Entity x y comps, rngY)
+
 
 setCommand :: Command -> GameState -> GameState
 setCommand = set command
 
 
+data Tile = EmptyTile | PlayerTile | WallTile deriving Eq
+
 data System = System
   { componentSet :: Set Component
   , everyTick    :: Command -> Entity -> GameState -> GameState
+  , buildRepr    :: Entity -> Tile -> Tile
   }
+
+instance Default System where
+  def =
+    System { componentSet = [], everyTick = \_ _ -> id, buildRepr = const id }
 
 -- runs a system's everyTick over all entities
 runSystemET :: System -> GameState -> GameState
@@ -81,19 +98,47 @@ runSystemET s gs = (foldl' (.) id . map (everyTick s $ gs ^. command))
 
 systems :: [System]
 systems =
-  [ -- move player
-    System { componentSet = [CanMove, IsPlayer]
+  [ -- render player
+    def { componentSet = [IsPlayer], buildRepr = \_ _ -> PlayerTile }
+    -- move player
+  , def
+    { componentSet = [CanMove, IsPlayer]
            -- TODO placeholder - should respond to commands
-           , everyTick = \c e -> over entities $ replace e (fromMoveCommand c e)
-           }
+    , everyTick    = \c e g ->
+      (over entities $ replace e $ fromMoveCommand c (g ^. entities) e) g
+    }
+    -- render wall
+  , def { componentSet = [IsWall], buildRepr = \_ _ -> WallTile }
   ]
  where
-  fromMoveCommand c = case c of
-    North -> over posY (subtract 1)
-    East  -> over posX (+ 1)
-    South -> over posY (+ 1)
-    West  -> over posX (subtract 1)
-    _     -> id
+   -- this has to prevent entities from walking on walls
+   -- that is why it is so complicated
+   -- BUG can't move above or below walls
+  fromMoveCommand c es e =
+    let newEntity = case c of
+          North -> over posY (subtract 1) e
+          East  -> over posX (+ 1) e
+          South -> over posY (+ 1) e
+          West  -> over posX (subtract 1) e
+          _     -> e
+        newPos = (newEntity ^. posX, newEntity ^. posY)
+    in  if any
+             (\e' ->
+               Set.member IsWall (e' ^. components)
+                 && ((e' ^. posX, e ^. posY) == newPos)
+             )
+             es
+          then e
+          else newEntity
+
+represent :: Entity -> Tile
+represent e =
+  ( foldl' (.) id
+    . map (($ e) . buildRepr)
+    . filter (flip Set.isSubsetOf (e ^. components) . componentSet)
+    $ systems
+    )
+    EmptyTile
 
 
 -- currently an out-of-bounds entity will just not appear
@@ -104,7 +149,7 @@ getGrid = flip compose mkEntityGrid . map setEntity . (^. entities)
 
 
 executeStep :: GameState -> GameState
-executeStep = compose . map runSystemET $ systems
+executeStep = (compose . map runSystemET) systems
 
 step :: (EntityGrid -> a) -> State GameState a
 step render = do

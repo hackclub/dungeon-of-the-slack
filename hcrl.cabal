@@ -20,11 +20,13 @@ library
       Paths_hcrl
   hs-source-dirs:
       ./
+  ghc-options: -O2 -Wall
   build-depends:
       JuicyPixels
     , aeson
     , base >=4.14 && <5
     , containers
+    , data-default
     , delay
     , file-embed
     , fixed-vector
@@ -46,11 +48,13 @@ executable hcrl
       Paths_hcrl
   hs-source-dirs:
       ./
+  ghc-options: -O2 -Wall
   build-depends:
       JuicyPixels
     , aeson
     , base >=4.14 && <5
     , containers
+    , data-default
     , delay
     , file-embed
     , fixed-vector
