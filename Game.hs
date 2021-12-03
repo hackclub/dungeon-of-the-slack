@@ -1,6 +1,8 @@
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedLists   #-}
 {-# LANGUAGE TemplateHaskell   #-}
+{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE LambdaCase #-}
 
 module Game
   ( mkEntityGrid
@@ -26,14 +28,15 @@ import qualified Data.Vector.Fixed             as Vec
 import           System.Random
 
 
-data Component = CanMove | IsPlayer | IsWall deriving (Eq, Ord)
+data Component = CanMove | IsPlayer | IsWall deriving (Eq, Ord, Show)
+
 
 data Entity = Entity
   { _posX       :: Int
   , _posY       :: Int
   , _components :: Set Component
   }
-  deriving Eq
+  deriving (Eq, Show)
 
 makeLenses ''Entity
 
@@ -58,20 +61,62 @@ makeLenses ''GameState
 mkGameState :: Command -> IO GameState
 mkGameState cmd = do
   rng <- getStdGen
-  let (player, rng')  = entityAtRandomPos rng [CanMove, IsPlayer]
-  let (wall, rng'')   = entityAtRandomPos rng' [IsWall]
-  let (wall', rng''') = entityAtRandomPos rng'' [IsWall]
+  -- let (player, rng') = entityAtRandomPos rng [CanMove, IsPlayer]
+  let (rng', rngWalls) = split rng
 
-  return $ GameState { gameRNG   = rng'''
-                     , _entities = [player, wall, wall']
+  return $ GameState { gameRNG   = rng'
+                     , _entities = mkWalls rngWalls []
                      , _command  = cmd
                      }
  where
-  randomCoord = randomR (0 :: Int, 17)
-  entityAtRandomPos rng comps =
-    let (x, rngX) = randomCoord rng
-        (y, rngY) = randomCoord rngX
-    in  (Entity x y comps, rngY)
+  randomCoord = randomR (1 :: Int, 22)
+
+  mkWalls :: StdGen -> [Entity] -> [Entity]
+  mkWalls rng es = mkWalls' (25 :: Integer) rng es
+
+  -- TODO code is ugly; should probably refactor slightly
+  mkWalls' 0 _ es = es
+  mkWalls' n rng es =
+    let (x, rng'  ) = randomCoord rng
+        (y, newRNG) = randomCoord rng'
+        adjEntities isX = filter
+          (\e -> abs (view pos1 e - dim1) < 3 && view pos2 e - dim2 == 0)
+            -- TODO which way leads to better-looking maps? get feedback
+          es
+           where
+            pos1 = if isX then posX else posY
+            dim1 = if isX then x else y
+            pos2 = if isX then posY else posX
+            dim2 = if isX then y else x
+        constrainWalls isMin isX =
+          (\case
+              []    -> if isMin then 0 else 23
+              e : _ -> e ^. pos1
+            )
+            . (if isMin then reverse else id)
+            . sortOn (view pos1)
+            . filter (flip (if isMin then (<) else (>)) dim1 . view pos1)
+            . filter ((== dim2) . view pos2)
+           where
+            dim1 = if isX then x else y
+            dim2 = if isX then y else x
+            pos1 = if isX then posX else posY
+            pos2 = if isX then posY else posX
+        minX     = constrainWalls True True es
+        maxX     = constrainWalls False True es
+        minY     = constrainWalls True False es
+        maxY     = constrainWalls False False es
+        newWalls = if even n
+          then [ Entity x' y [IsWall] | x' <- [minX .. maxX] ]
+          else [ Entity x y' [IsWall] | y' <- [minY .. maxY] ]
+    in  if null (adjEntities $ odd n)
+          then mkWalls' (n + 1) newRNG (newWalls ++ es)
+          else mkWalls' (n - 1) newRNG es
+
+  -- entityAtRandomPos rng comps =
+  --   let (x, rngX) = randomCoord rng
+  --       (y, rngY) = randomCoord rngX
+  --   in  (Entity x y comps, rngY)
 
 
 setCommand :: Command -> GameState -> GameState
@@ -103,7 +148,6 @@ systems =
     -- move player
   , def
     { componentSet = [CanMove, IsPlayer]
-           -- TODO placeholder - should respond to commands
     , everyTick    = \c e g ->
       (over entities $ replace e $ fromMoveCommand c (g ^. entities) e) g
     }
@@ -112,8 +156,6 @@ systems =
   ]
  where
    -- this has to prevent entities from walking on walls
-   -- that is why it is so complicated
-   -- BUG can't move above or below walls
   fromMoveCommand c es e =
     let newEntity = case c of
           North -> over posY (subtract 1) e
@@ -125,7 +167,7 @@ systems =
     in  if any
              (\e' ->
                Set.member IsWall (e' ^. components)
-                 && ((e' ^. posX, e ^. posY) == newPos)
+                 && ((e' ^. posX, e' ^. posY) == newPos)
              )
              es
           then e
