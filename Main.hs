@@ -17,7 +17,9 @@ import           Relude
 
 import           Game
 import           Slack
-import           Utils                          ( m2l )
+import           Utils                          ( m2l
+                                                , matrixSize
+                                                )
 
 import           Codec.Picture
 import           Data.FileEmbed
@@ -32,8 +34,16 @@ tileset :: [Image PixelRGB8]
 tileset = map (fromDynamic . decodePng . snd) $(embedDir "tiles")
   where fromDynamic di = convertRGB8 . either (error . fromString) id $ di
 
+pixelSize :: Int
+pixelSize = 3
+
+tileSize :: Int
+tileSize = pixelSize * 8
+
 renderGrid :: EntityGrid -> ByteString
-renderGrid e = fromLazy . encodePng $ generateImage getPixel 384 384
+renderGrid e = fromLazy . encodePng $ generateImage getPixel
+                                                    (matrixSize * tileSize)
+                                                    (matrixSize * tileSize)
  where
   getPixel x y = case getEntity of
     Just e' ->
@@ -43,21 +53,25 @@ renderGrid e = fromLazy . encodePng $ generateImage getPixel 384 384
     Nothing -> PixelRGB8 34 35 35 -- other tiles' bg color
    where
     entityExists x' y' = isJust . toEntityIndex x' . toEntityIndex y' . m2l $ e
-    entityAbove   = entityExists x (if y > 16 then y - 16 else 0)
-    entityBelow   = entityExists x (if y < 368 then y + 16 else y)
-    entityToLeft  = entityExists (if x > 16 then x - 16 else 0) y
-    entityToRight = entityExists (if x < 368 then x + 16 else 0) y
+    entityAbove = entityExists x (if y > tileSize then y - tileSize else 0)
+    entityBelow = entityExists
+      x
+      (if y < (matrixSize * tileSize - tileSize) then y + tileSize else y)
+    entityToLeft  = entityExists (if x > tileSize then x - tileSize else 0) y
+    entityToRight = entityExists
+      (if x < (matrixSize * tileSize - tileSize) then x + tileSize else 0)
+      y
+    vertical =
+      entityAbove && entityBelow && not (entityToLeft && entityToRight)
 
-    getEntity     = toEntityIndex x . toEntityIndex y . m2l $ e
+    getEntity = toEntityIndex x . toEntityIndex y . m2l $ e
     fromEntityRepr t = case t of
-      EmptyTile  -> 17
-      PlayerTile -> 4
-      WallTile ->
-        if entityAbove && entityBelow && not (entityToLeft && entityToRight)
-          then 148
-          else 1
-    toEntityIndex  = flip (!!) . flip div 16
-    toTilesetIndex = flip mod 8 . flip div 2
+      DefaultTile -> 96 -- closest i could find to "missing texture" so to speak
+      PlayerTile  -> 4
+      WallTile    -> if vertical then 148 else 1
+      DoorTile    -> if vertical then 149 else 2
+    toEntityIndex  = flip (!!) . flip div tileSize
+    toTilesetIndex = flip mod 8 . flip div pixelSize
 
 
 type VoteCounter = Map Command Int

@@ -28,7 +28,7 @@ import qualified Data.Vector.Fixed             as Vec
 import           System.Random
 
 
-data Component = CanMove | IsPlayer | IsWall deriving (Eq, Ord, Show)
+data Component = CanMove | IsPlayer | IsWall | IsDoor deriving (Eq, Ord, Show)
 
 
 data Entity = Entity
@@ -61,69 +61,95 @@ makeLenses ''GameState
 mkGameState :: Command -> IO GameState
 mkGameState cmd = do
   rng <- getStdGen
-  -- let (player, rng') = entityAtRandomPos rng [CanMove, IsPlayer]
-  let (rng', rngWalls) = split rng
-
-  return $ GameState { gameRNG   = rng'
-                     , _entities = mkWalls rngWalls []
-                     , _command  = cmd
-                     }
+  -- lmao
+  let (rng', (rngWalls, (rngPlayer, rngItems))) =
+        (fmap (fmap split . split) . split) rng
+  return $ GameState
+    { gameRNG   = rng'
+    , _entities = (mkPlayer rngPlayer . mkItems rngItems . mkWalls rngWalls) []
+    , _command  = cmd
+    }
  where
-  randomCoord = randomR (1 :: Int, 22)
+  randomCoord       = randomR (0 :: Int, matrixSize - 1)
+  randomCoordNoEdge = randomR (1 :: Int, matrixSize - 2)
 
-  mkWalls :: StdGen -> [Entity] -> [Entity]
+  mkEntityOnEmpty comps rng es =
+    if any (\e -> e ^. posX == x && e ^. posY == y) es
+      then mkEntityOnEmpty comps newRNG es
+      else Entity x y comps : es
+   where
+    (x, rng'  ) = randomCoord rng
+    (y, newRNG) = randomCoord rng'
+
+  mkPlayer = mkEntityOnEmpty [CanMove, IsPlayer]
+  mkItems  = mkItems' (10 :: Integer)
+  mkItems' 0 _ es = es
+  mkItems' n rng es =
+    let newRNG = (fst . split) rng
+        es'    = mkEntityOnEmpty [] rng es
+    in  mkItems' (n - 1) newRNG es'
+
   mkWalls rng es = mkWalls' (25 :: Integer) rng es
 
   -- TODO code is ugly; should probably refactor slightly
   mkWalls' 0 _ es = es
   mkWalls' n rng es =
-    let (x, rng'  ) = randomCoord rng
-        (y, newRNG) = randomCoord rng'
-        adjEntities isX = filter
-          (\e -> abs (view pos1 e - dim1) < 3 && view pos2 e - dim2 == 0)
-            -- TODO which way leads to better-looking maps? get feedback
-          es
-           where
-            pos1 = if isX then posX else posY
-            dim1 = if isX then x else y
-            pos2 = if isX then posY else posX
-            dim2 = if isX then y else x
-        constrainWalls isMin isX =
-          (\case
-              []    -> if isMin then 0 else 23
-              e : _ -> e ^. pos1
-            )
-            . (if isMin then reverse else id)
-            . sortOn (view pos1)
-            . filter (flip (if isMin then (<) else (>)) dim1 . view pos1)
-            . filter ((== dim2) . view pos2)
-           where
-            dim1 = if isX then x else y
-            dim2 = if isX then y else x
-            pos1 = if isX then posX else posY
-            pos2 = if isX then posY else posX
-        minX     = constrainWalls True True es
-        maxX     = constrainWalls False True es
-        minY     = constrainWalls True False es
-        maxY     = constrainWalls False False es
-        newWalls = if even n
-          then [ Entity x' y [IsWall] | x' <- [minX .. maxX] ]
-          else [ Entity x y' [IsWall] | y' <- [minY .. maxY] ]
-    in  if null (adjEntities $ odd n)
-          then mkWalls' (n + 1) newRNG (newWalls ++ es)
-          else mkWalls' (n - 1) newRNG es
+    let
+      -- x and y are reversed depending on whether the wall is vertical or
+      -- horizontal
+      pos1 isX = if isX then posX else posY
+      dim1 isX = if isX then x else y
+      pos2 isX = if isX then posY else posX
+      dim2 isX = if isX then y else x
 
-  -- entityAtRandomPos rng comps =
-  --   let (x, rngX) = randomCoord rng
-  --       (y, rngY) = randomCoord rngX
-  --   in  (Entity x y comps, rngY)
+      (x, rng' ) = randomCoordNoEdge rng
+      (y, rng'') = randomCoordNoEdge rng'
+      adjEntities isX = filter
+        (\e ->
+          abs (view (pos1 isX) e - dim1 isX)
+            <  3
+            && view (pos2 isX) e
+            -  dim2 isX
+            == 0
+        )
+        es
+      constrainWalls isMin isX =
+        (\case
+            []    -> if isMin then Just 0 else Just (matrixSize - 1)
+            e : _ -> if Set.member IsDoor (e ^. components)
+              then Nothing
+              else Just $ e ^. pos1 isX
+          )
+          . (if isMin then reverse else id)
+          . sortOn (view $ pos1 isX)
+          . filter ((if isMin then (>=) else (<=)) (dim1 isX) . view (pos1 isX))
+          . filter ((== dim2 isX) . view (pos2 isX))
+      dimRanges =
+        [ constrainWalls isMin isX es
+        | isX   <- [True, False]
+        , isMin <- [True, False]
+        ]
+    in
+      case dimRanges of
+        [Just minX, Just maxX, Just minY, Just maxY] ->
+          let
+            newWalls = if even n
+              then [ Entity x' y [IsWall] | x' <- [minX .. maxX] ]
+              else [ Entity x y' [IsWall] | y' <- [minY .. maxY] ]
+            (doorPos, newRNG) = randomR (0, length newWalls - 1) rng''
+            newWallsWithDoor  = newWalls & ix doorPos %~ set components [IsDoor]
+          in
+            if null (adjEntities $ odd n)
+              then mkWalls' (n + 1) newRNG (newWallsWithDoor ++ es)
+              else mkWalls' (n - 1) newRNG es
+        _ -> mkWalls' (n - 1) rng'' es
 
 
 setCommand :: Command -> GameState -> GameState
 setCommand = set command
 
 
-data Tile = EmptyTile | PlayerTile | WallTile deriving Eq
+data Tile = DefaultTile | PlayerTile | WallTile | DoorTile deriving Eq
 
 data System = System
   { componentSet :: Set Component
@@ -153,6 +179,8 @@ systems =
     }
     -- render wall
   , def { componentSet = [IsWall], buildRepr = \_ _ -> WallTile }
+    -- render door
+  , def { componentSet = [IsDoor], buildRepr = \_ _ -> DoorTile }
   ]
  where
    -- this has to prevent entities from walking on walls
@@ -180,7 +208,7 @@ represent e =
     . filter (flip Set.isSubsetOf (e ^. components) . componentSet)
     $ systems
     )
-    EmptyTile
+    DefaultTile
 
 
 -- currently an out-of-bounds entity will just not appear
