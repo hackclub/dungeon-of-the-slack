@@ -255,7 +255,6 @@ sendMessageFile token channelId msgContent = do
   res <- post
     "https://slack.com/api/files.upload"
     ["token" := token, "channels" := channelId, "content" := msgContent]
-  print (decode (res ^. responseBody) :: Maybe Value)
   case eitherDecode (res ^. responseBody) of
     Left e -> die (e <> "\n" <> (decodeUtf8 . view responseBody) res)
     Right (SendFileRes _ s) -> return s

@@ -26,12 +26,13 @@ import           Utils
 
 import           Control.Lens
 import           Data.Default
+import           Data.List                      ( delete )
 import qualified Data.Set                      as Set
 import qualified Data.Vector.Fixed             as Vec
 import           System.Random
 
 
-data Component = CanMove | IsPlayer | IsWall | IsDoor | IsPotion Effect deriving (Eq, Ord)
+data Component = CanMove | IsPlayer | IsWall | IsDoor | IsEvil | IsPotion Effect deriving (Eq, Ord)
 
 data Effect = Effect
   deriving (Eq, Ord)
@@ -59,6 +60,12 @@ isDoor :: Set Component -> Bool
 isDoor = any
   (\case
     IsDoor -> True
+    _      -> False
+  )
+isEvil :: Set Component -> Bool
+isEvil = any
+  (\case
+    IsEvil -> True
     _      -> False
   )
 isPotion :: Set Component -> Bool
@@ -89,7 +96,7 @@ mkEntityGrid :: EntityGrid
 mkEntityGrid = Matrix . Vec.replicate . Vec.replicate $ Nothing
 
 
-data Command = Noop | North | East | South | West deriving (Eq, Ord, Show)
+data Command = Noop | North | East | South | West | Drink deriving (Eq, Ord, Show)
 
 
 data GameState = GameState
@@ -103,12 +110,16 @@ makeLenses ''GameState
 mkGameState :: Command -> IO GameState
 mkGameState cmd = do
   rng <- getStdGen
-  -- lmao
-  let (rng', (rngWalls, (rngPlayer, rngItems))) =
-        (fmap (fmap split . split) . split) rng
+  -- -- lmao
+  -- let (rng', (rngWalls, (rngPlayer, rngItems))) =
+  --       ((fmap (fmap split . split) . split)) rng
+  [rng', rngWalls, rngPlayer, rngEvil, rngItems] <- replicateM 5 newStdGen
   return $ GameState
     { gameRNG   = rng'
-    , _entities = (mkPlayer rngPlayer . mkItems rngItems . mkWalls rngWalls) []
+    , _entities =
+      (mkPlayer rngPlayer . mkItems rngItems . mkEvil rngEvil . mkWalls rngWalls
+        )
+        []
     , _command  = cmd
     }
  where
@@ -124,7 +135,15 @@ mkGameState cmd = do
     (y, newRNG) = randomCoord rng'
 
   mkPlayer = mkEntityOnEmpty [CanMove, IsPlayer]
-  mkItems  = mkItems' (10 :: Integer)
+
+  mkEvil   = mkEvil' (5 :: Integer)
+  mkEvil' 0 _   es = es
+  mkEvil' n rng es = mkEvil' (n - 1) newRNG es'
+   where
+    (newRNG, _) = split rng
+    es'         = mkEntityOnEmpty [CanMove, IsEvil] rng es
+
+  mkItems = mkItems' (5 :: Integer)
   mkItems' 0 _ es = es
   mkItems' n rng es =
     let (compsRNG, newRNG) = split rng
@@ -191,7 +210,7 @@ setCommand :: Command -> GameState -> GameState
 setCommand = set command
 
 
-data Tile = DefaultTile | PlayerTile | WallTile | DoorTile | PotionTile deriving Eq
+data Tile = DefaultTile | PlayerTile | WallTile | DoorTile | EvilTile | PotionTile deriving Eq
 
 data System = System
   { qualifier :: Entity -> Bool
@@ -227,10 +246,43 @@ systems =
   , def { qualifier = isWall . view components, buildRepr = \_ _ -> WallTile }
     -- render door
   , def { qualifier = isDoor . view components, buildRepr = \_ _ -> DoorTile }
+    -- render enemy
+  , def { qualifier = isEvil . view components, buildRepr = \_ _ -> EvilTile }
+    -- move enemy (TODO placeholder)
+  , def
+    { qualifier = (\cs -> canMove cs && isEvil cs) . view components
+    , everyTick = \_ e g ->
+      (over entities $ replace e $ fromMoveCommand North (g ^. entities) e) g
+    }
     -- render potion
   , def { qualifier = isPotion . view components
         , buildRepr = \_ _ -> PotionTile
         }
+    -- drink potion
+    -- TODO better way to formulate this?
+  , def
+    { qualifier = isPlayer . view components
+    , everyTick = \c e g -> if c == Drink
+                    then
+                      case
+                        filter
+                          (\e' ->
+                            e
+                              ^. posX
+                              == e'
+                              ^. posX
+                              && e
+                              ^. posY
+                              == e'
+                              ^. posY
+                              && (isPotion . view components) e'
+                          )
+                          (g ^. entities)
+                      of
+                        []    -> g -- drinking nothing doesn't do very much
+                        p : _ -> over entities (delete p) g -- TODO apply effect
+                    else g
+    }
   ]
  where
    -- this has to prevent entities from walking on walls

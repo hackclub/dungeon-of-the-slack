@@ -71,6 +71,7 @@ renderGrid e = fromLazy . encodePng $ generateImage getPixel
       PlayerTile  -> 4
       WallTile    -> if vertical then 148 else 1
       DoorTile    -> if vertical then 149 else 2
+      EvilTile    -> 22
       PotionTile  -> 135
     toEntityIndex  = flip (!!) . flip div tileSize
     toTilesetIndex = flip mod 8 . flip div pixelSize
@@ -93,7 +94,12 @@ stepAndSend token channelId imgbb edit cmd gameState = do
       timestamp <- sendMessageFile token channelId img >>= return . fromJust
       mapM_
         (reactToMessage token channelId timestamp)
-        ["tw_arrow_up", "tw_arrow_right", "tw_arrow_down", "tw_arrow_left"]
+        [ "tw_arrow_up"
+        , "tw_arrow_right"
+        , "tw_arrow_down"
+        , "tw_arrow_left"
+        , "tw_tea"
+        ]
       return (timestamp, newState)
     Just timestamp -> do
       editMessageFile token channelId imgbb timestamp img
@@ -111,6 +117,7 @@ handleMsg token channelId imgbb timestamp gsRef msg = do
               "tw_arrow_right" -> East
               "tw_arrow_down"  -> South
               "tw_arrow_left"  -> West
+              "tw_tea"         -> Drink
               _                -> Noop
         (_, newState) <-
           readIORef gsRef
