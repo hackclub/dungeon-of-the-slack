@@ -1,8 +1,9 @@
+{-# LANGUAGE GADTs             #-}
+{-# LANGUAGE LambdaCase        #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedLists   #-}
 {-# LANGUAGE TemplateHaskell   #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE LambdaCase #-}
 
 module Game
   ( mkEntityGrid
@@ -20,19 +21,21 @@ module Game
   , step
   ) where
 
-import           Relude
+import           Prelude                        ( head )
+import           Relude                  hiding ( head )
 
 import           Utils
 
 import           Control.Lens
 import           Data.Default
+import           Data.Graph.AStar
 import           Data.List                      ( delete )
 import qualified Data.Set                      as Set
 import qualified Data.Vector.Fixed             as Vec
 import           System.Random
 
 
-data Component = CanMove | IsPlayer | IsWall | IsDoor | IsEvil | IsPotion Effect deriving (Eq, Ord)
+data Component = CanMove | IsWall | IsDoor | IsPotion Effect | IsEvil | IsPlayer deriving (Eq, Ord)
 
 data Effect = Effect
   deriving (Eq, Ord)
@@ -109,13 +112,13 @@ makeLenses ''GameState
 
 mkGameState :: Command -> IO GameState
 mkGameState cmd = do
-  rng <- getStdGen
+  -- rng <- getStdGen
   -- -- lmao
   -- let (rng', (rngWalls, (rngPlayer, rngItems))) =
   --       ((fmap (fmap split . split) . split)) rng
-  [rng', rngWalls, rngPlayer, rngEvil, rngItems] <- replicateM 5 newStdGen
+  [rng, rngWalls, rngPlayer, rngEvil, rngItems] <- replicateM 5 newStdGen
   return $ GameState
-    { gameRNG   = rng'
+    { gameRNG   = rng -- rng'
     , _entities =
       (mkPlayer rngPlayer . mkItems rngItems . mkEvil rngEvil . mkWalls rngWalls
         )
@@ -230,6 +233,24 @@ runSystemET s gs = (foldl' (.) id . map (everyTick s $ gs ^. command))
   (filter (qualifier s) (gs ^. entities))
   gs
 
+gridAStar :: [Entity] -> (Int, Int) -> (Int, Int) -> Maybe [(Int, Int)]
+gridAStar es begin dest = aStar getNeighbors
+                                (\_ _ -> 1)
+                                (const 1)
+                                (== dest)
+                                begin
+ where
+  getNeighbors (x, y) =
+    (fromList . filter
+        (\(x', y') -> none
+          (\e ->
+            e ^. posX == x' && e ^. posY == y' && (isWall . view components) e
+          )
+          es
+        )
+      )
+      [(x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)]
+
 systems :: [System]
 systems =
   [ -- render player
@@ -252,7 +273,28 @@ systems =
   , def
     { qualifier = (\cs -> canMove cs && isEvil cs) . view components
     , everyTick = \_ e g ->
-      (over entities $ replace e $ fromMoveCommand North (g ^. entities) e) g
+      (over entities $ replace
+          e
+        -- \ $ fromMoveCommand
+          (case
+              gridAStar
+                (g ^. entities)
+                (e ^. posX, e ^. posY)
+                ((\e' -> (e' ^. posX, e' ^. posY))
+                  (head . filter (isPlayer . view components) $ g ^. entities)
+                )
+            of
+              -- Just ((x, y) : _) -> traceShowId $ coordAsCommand
+              --   (trace (show (x, y) <> " " <> show (e ^. posX, e ^. posY)) (x, y))
+              --   e
+              -- _ -> Noop
+              Just ((x, y) : _) -> e & posX .~ x & posY .~ y
+              _                 -> e
+          )
+          -- (g ^. entities)
+          -- e
+        )
+        g
     }
     -- render potion
   , def { qualifier = isPotion . view components
@@ -285,7 +327,13 @@ systems =
     }
   ]
  where
-   -- this has to prevent entities from walking on walls
+  -- coordAsCommand (x, y) e | (x, y) == (x' - 1, y') = North
+  --                         | (x, y) == (x', y' + 1) = East
+  --                         | (x, y) == (x' + 1, y') = South
+  --                         | (x, y) == (x', y' - 1) = West
+  --                         | otherwise              = Noop
+  --   where (x', y') = (e ^. posX, e ^. posY)
+   -- This has to prevent entities from walking on walls
   fromMoveCommand c es e =
     let newEntity = case c of
           North -> over posY (subtract 1) e
@@ -316,7 +364,11 @@ represent e =
 -- currently an out-of-bounds entity will just not appear
 -- this is bc gset uses ix
 getGrid :: GameState -> EntityGrid
-getGrid = flip compose mkEntityGrid . map setEntity . (^. entities)
+getGrid =
+  flip compose mkEntityGrid
+    . map setEntity
+    . sortOn (Down . view components)
+    . (^. entities)
   where setEntity e = mset (e ^. posX) (e ^. posY) (Just e)
 
 

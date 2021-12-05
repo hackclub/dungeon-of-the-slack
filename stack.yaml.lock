@@ -3,25 +3,25 @@
 # For more information, please see the documentation at:
 #   https://docs.haskellstack.org/en/stable/lock_files
 
-snapshots:
-- original:
-    url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/lts/18/17.yaml
-  completed:
-    url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/lts/18/17.yaml
-    sha256: e66e70a7f998036025e8f40abc89b8eeb79c88f57727020cba1b54f375aa7ca0
-    size: 586292
 packages:
-- original:
-    hackage: delay-0
-  completed:
+- completed:
+    hackage: astar-0.3.0.0@sha256:8bf6350542e9db9451490e8993560ee843dc48a61d46a206985430f9b62461c8,967
+    pantry-tree:
+      sha256: c4176cc3fc9ad39f2a9fc7eb4346c87b6e60b70ba23d8e2adbdfc81fe544b808
+      size: 213
+  original:
+    hackage: astar-0.3.0.0
+- completed:
+    hackage: delay-0@sha256:7fab2998bbf13bb09a2c0d9719e63417aa61b8a70706f2bc3de4478821485331,1466
     pantry-tree:
       sha256: 14b6dfd690427d70a1e70f8695b3a712c19bea7ed60e6624a3df51123920b6bd
       size: 264
-    hackage: delay-0@sha256:7fab2998bbf13bb09a2c0d9719e63417aa61b8a70706f2bc3de4478821485331,1466
-- original:
-    hackage: slack-web-0.3.0.1
-  completed:
-    pantry-tree:
-      sha256: 11038cd45dddab0b7cd085b5b4d55bda4581cfa2257ce90a5452a1e536941647
-      size: 1282
-    hackage: slack-web-0.3.0.1@sha256:0deeda0ff67f952bbde60a1fedd5607a6f0cbbee65eb967ab49c20786900314d,2573
+  original:
+    hackage: delay-0
+snapshots:
+- completed:
+    sha256: e66e70a7f998036025e8f40abc89b8eeb79c88f57727020cba1b54f375aa7ca0
+    size: 586292
+    url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/lts/18/17.yaml
+  original:
+    url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/lts/18/17.yaml

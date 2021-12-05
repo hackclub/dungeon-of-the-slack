@@ -13,6 +13,7 @@ dependencies:
 
   - aeson
   - aeson-pretty
+  - astar
   - base64
   - containers
   - data-default
