@@ -10,9 +10,7 @@ module Main
   ( main
   ) where
 
-import           Prelude                        ( (!!)
-                                                , maximum
-                                                )
+import           Prelude                        ( (!!) )
 import           Relude
 
 import           Game
@@ -24,9 +22,8 @@ import           Utils                          ( m2l
 import           Codec.Picture
 import           Data.FileEmbed
 
-import           Control.Concurrent
-import           Control.Time
-import qualified Data.Map                      as Map
+import           Control.Lens                   ( view )
+import           Data.Maybe                     ( fromJust )
 import           System.Environment
 
 
@@ -52,17 +49,21 @@ renderGrid e = fromLazy . encodePng $ generateImage getPixel
         !! (fromEntityRepr . represent $ e')
     Nothing -> PixelRGB8 34 35 35 -- other tiles' bg color
    where
-    entityExists x' y' = isJust . toEntityIndex x' . toEntityIndex y' . m2l $ e
-    entityAbove = entityExists x (if y > tileSize then y - tileSize else 0)
-    entityBelow = entityExists
+    wallExists x' y' =
+      maybe False ((\e' -> isWall e' || isDoor e') . view components)
+        . toEntityIndex x'
+        . toEntityIndex y'
+        . m2l
+        $ e
+    wallAbove = wallExists x (if y > tileSize then y - tileSize else 0)
+    wallBelow = wallExists
       x
       (if y < (matrixSize * tileSize - tileSize) then y + tileSize else y)
-    entityToLeft  = entityExists (if x > tileSize then x - tileSize else 0) y
-    entityToRight = entityExists
+    wallToLeft  = wallExists (if x > tileSize then x - tileSize else 0) y
+    wallToRight = wallExists
       (if x < (matrixSize * tileSize - tileSize) then x + tileSize else 0)
       y
-    vertical =
-      entityAbove && entityBelow && not (entityToLeft && entityToRight)
+    vertical  = wallAbove && wallBelow && not (wallToLeft && wallToRight)
 
     getEntity = toEntityIndex x . toEntityIndex y . m2l $ e
     fromEntityRepr t = case t of
@@ -70,74 +71,80 @@ renderGrid e = fromLazy . encodePng $ generateImage getPixel
       PlayerTile  -> 4
       WallTile    -> if vertical then 148 else 1
       DoorTile    -> if vertical then 149 else 2
+      PotionTile  -> 135
     toEntityIndex  = flip (!!) . flip div tileSize
     toTilesetIndex = flip mod 8 . flip div pixelSize
 
 
-type VoteCounter = Map Command Int
+-- type VoteCounter = Map Command Int
 
-handleMsg :: IORef VoteCounter -> EventHandler
-handleMsg vcRef msg = do
+stepAndSend
+  :: Text
+  -> Text
+  -> Text
+  -> Maybe Text
+  -> Command
+  -> GameState
+  -> IO (Text, GameState)
+stepAndSend token channelId imgbb edit cmd gameState = do
+  let (img, newState) = runState (step renderGrid) $ setCommand cmd gameState
+  case edit of
+    Nothing -> do
+      timestamp <- sendMessageFile token channelId img >>= return . fromJust
+      mapM_
+        (reactToMessage token channelId timestamp)
+        ["tw_arrow_up", "tw_arrow_right", "tw_arrow_down", "tw_arrow_left"]
+      return (timestamp, newState)
+    Just timestamp -> do
+      editMessageFile token channelId imgbb timestamp img
+      return (timestamp, newState)
+
+handleMsg :: Text -> Text -> Text -> Text -> IORef GameState -> EventHandler
+handleMsg token channelId imgbb timestamp gsRef msg = do
   putStrLn $ "Message from socket: " <> show msg
   case msg of
-    SlashCommand t -> do
-      let cmd = case t of
-            "north" -> North
-            "n"     -> North
-            "east"  -> East
-            "e"     -> East
-            "south" -> South
-            "s"     -> South
-            "west"  -> West
-            "w"     -> West
-            _       -> Noop
+    ReactionAdd e u -> if u == "U02MTTW1XND" -- user id hardcoded for convenience. sorry!
+      then return BasicRes
+      else do
+        let cmd = case e of
+              "tw_arrow_up"    -> North
+              "tw_arrow_right" -> East
+              "tw_arrow_down"  -> South
+              "tw_arrow_left"  -> West
+              _                -> Noop
+        (_, newState) <-
+          readIORef gsRef
+            >>= stepAndSend token channelId imgbb (Just timestamp) cmd
+        writeIORef gsRef newState
 
-      modifyIORef vcRef $ Map.insertWith (+) cmd 1
-      return $ SlashCommandRes { scrText      = "Received: " <> show cmd
-                               , scrInChannel = True
-                               }
-    _ -> die $ "Can't handle event: " <> show msg
-
-gameLoop :: IORef VoteCounter -> GameState -> Text -> Text -> IO ()
-gameLoop vcRef gameState token channelId = do
-  delay (5 :: Natural)
-    -- meaning depends on type; (5 :: Natural) is 5 seconds
-
-  voteCounter <- readIORef vcRef
-  let topVote = if null voteCounter
-        then Nothing
-        else
-          listToMaybe
-          . Map.keys
-          . Map.filter (== (maximum . Map.elems $ voteCounter))
-          $ voteCounter
-  writeIORef vcRef mempty
-
-  newState <- case topVote of
-    Just cmd -> do
-      let (img, newState) =
-            runState (step renderGrid) $ setCommand cmd gameState
-      sendMessageFile token channelId img
-      return newState
-    Nothing -> do
-      return gameState
-
-  gameLoop vcRef newState token channelId
+        return BasicRes
+    Unknown _ f -> do
+      putTextLn ("Ah shit\n" <> f)
+      return NoRes
+    _ -> do
+      putStrLn $ "Can't handle event: " <> show msg
+      return NoRes
 
 
 main :: IO ()
 main = do
-  let envVarNames = ["SLACK_API_TOKEN", "SLACK_WS_TOKEN", "RL_CHANNEL_NAME"]
+  let envVarNames =
+        [ "SLACK_API_TOKEN"
+        , "SLACK_WS_TOKEN"
+        , "RL_CHANNEL_NAME"
+        , "IMGBB_API_KEY"
+        ]
   envVars <- mapM lookupEnv envVarNames
 
   case map (fmap fromString) envVars of
-    [Just at, Just wst, Just cn] -> do
-      vsRef <- newIORef mempty
-      void . forkIO $ wsConnect wst (handleMsg vsRef)
-      channelId <- getChannelId at cn
+    [Just at, Just wst, Just cn, Just imgbb] -> do
+      channelId              <- getChannelId at cn
+      (timestamp, gameState) <-
+        mkGameState Noop >>= stepAndSend at channelId imgbb Nothing Noop
 
-      gameState <- mkGameState Noop
-      gameLoop vsRef gameState at channelId
+      gsRef <- newIORef gameState
+      wsConnect wst (handleMsg at channelId imgbb timestamp gsRef)
+
     _ ->
       void
         .  die

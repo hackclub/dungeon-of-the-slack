@@ -12,6 +12,8 @@ dependencies:
   - JuicyPixels
 
   - aeson
+  - aeson-pretty
+  - base64
   - containers
   - data-default
   - delay

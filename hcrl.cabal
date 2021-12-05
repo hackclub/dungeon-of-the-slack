@@ -24,7 +24,9 @@ library
   build-depends:
       JuicyPixels
     , aeson
+    , aeson-pretty
     , base >=4.14 && <5
+    , base64
     , containers
     , data-default
     , delay
@@ -52,7 +54,9 @@ executable hcrl
   build-depends:
       JuicyPixels
     , aeson
+    , aeson-pretty
     , base >=4.14 && <5
+    , base64
     , containers
     , data-default
     , delay

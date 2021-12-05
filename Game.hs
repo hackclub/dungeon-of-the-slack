@@ -7,6 +7,9 @@
 module Game
   ( mkEntityGrid
   , mkGameState
+  , components
+  , isDoor
+  , isWall
   , Entity
   , EntityGrid
   , Command(..)
@@ -28,7 +31,46 @@ import qualified Data.Vector.Fixed             as Vec
 import           System.Random
 
 
-data Component = CanMove | IsPlayer | IsWall | IsDoor deriving (Eq, Ord, Show)
+data Component = CanMove | IsPlayer | IsWall | IsDoor | IsPotion Effect deriving (Eq, Ord)
+
+data Effect = Effect
+  deriving (Eq, Ord)
+
+-- TODO use th or something?
+canMove :: Set Component -> Bool
+canMove = any
+  (\case
+    CanMove -> True
+    _       -> False
+  )
+isPlayer :: Set Component -> Bool
+isPlayer = any
+  (\case
+    IsPlayer -> True
+    _        -> False
+  )
+isWall :: Set Component -> Bool
+isWall = any
+  (\case
+    IsWall -> True
+    _      -> False
+  )
+isDoor :: Set Component -> Bool
+isDoor = any
+  (\case
+    IsDoor -> True
+    _      -> False
+  )
+isPotion :: Set Component -> Bool
+isPotion = any
+  (\case
+    IsPotion _ -> True
+    _          -> False
+  )
+
+randomItemComponents :: StdGen -> Set Component
+randomItemComponents rng =
+  fromList [randomChoice [IsPotion (randomChoice [Effect] rng)] rng]
 
 
 data Entity = Entity
@@ -36,7 +78,7 @@ data Entity = Entity
   , _posY       :: Int
   , _components :: Set Component
   }
-  deriving (Eq, Show)
+  deriving Eq
 
 makeLenses ''Entity
 
@@ -85,8 +127,8 @@ mkGameState cmd = do
   mkItems  = mkItems' (10 :: Integer)
   mkItems' 0 _ es = es
   mkItems' n rng es =
-    let newRNG = (fst . split) rng
-        es'    = mkEntityOnEmpty [] rng es
+    let (compsRNG, newRNG) = split rng
+        es' = mkEntityOnEmpty (randomItemComponents compsRNG) rng es
     in  mkItems' (n - 1) newRNG es'
 
   mkWalls rng es = mkWalls' (25 :: Integer) rng es
@@ -149,38 +191,46 @@ setCommand :: Command -> GameState -> GameState
 setCommand = set command
 
 
-data Tile = DefaultTile | PlayerTile | WallTile | DoorTile deriving Eq
+data Tile = DefaultTile | PlayerTile | WallTile | DoorTile | PotionTile deriving Eq
 
 data System = System
-  { componentSet :: Set Component
-  , everyTick    :: Command -> Entity -> GameState -> GameState
-  , buildRepr    :: Entity -> Tile -> Tile
+  { qualifier :: Entity -> Bool
+  , everyTick :: Command -> Entity -> GameState -> GameState
+  , buildRepr :: Entity -> Tile -> Tile
   }
 
 instance Default System where
-  def =
-    System { componentSet = [], everyTick = \_ _ -> id, buildRepr = const id }
+  def = System { qualifier = const False
+               , everyTick = \_ _ -> id
+               , buildRepr = const id
+               }
 
 -- runs a system's everyTick over all entities
 runSystemET :: System -> GameState -> GameState
 runSystemET s gs = (foldl' (.) id . map (everyTick s $ gs ^. command))
-  (filter (Set.isSubsetOf (componentSet s) . (^. components)) (gs ^. entities))
+  (filter (qualifier s) (gs ^. entities))
   gs
 
 systems :: [System]
 systems =
   [ -- render player
-    def { componentSet = [IsPlayer], buildRepr = \_ _ -> PlayerTile }
+    def { qualifier = isPlayer . view components
+        , buildRepr = \_ _ -> PlayerTile
+        }
     -- move player
   , def
-    { componentSet = [CanMove, IsPlayer]
-    , everyTick    = \c e g ->
+    { qualifier = (\cs -> isPlayer cs && canMove cs) . view components
+    , everyTick = \c e g ->
       (over entities $ replace e $ fromMoveCommand c (g ^. entities) e) g
     }
     -- render wall
-  , def { componentSet = [IsWall], buildRepr = \_ _ -> WallTile }
+  , def { qualifier = isWall . view components, buildRepr = \_ _ -> WallTile }
     -- render door
-  , def { componentSet = [IsDoor], buildRepr = \_ _ -> DoorTile }
+  , def { qualifier = isDoor . view components, buildRepr = \_ _ -> DoorTile }
+    -- render potion
+  , def { qualifier = isPotion . view components
+        , buildRepr = \_ _ -> PotionTile
+        }
   ]
  where
    -- this has to prevent entities from walking on walls
@@ -205,7 +255,7 @@ represent :: Entity -> Tile
 represent e =
   ( foldl' (.) id
     . map (($ e) . buildRepr)
-    . filter (flip Set.isSubsetOf (e ^. components) . componentSet)
+    . filter (($ e) . qualifier)
     $ systems
     )
     DefaultTile
