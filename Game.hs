@@ -170,7 +170,7 @@ mkGameState cmd = do
   mkEvil' n rng es = mkEvil' (n - 1) newRNG es'
    where
     (newRNG, _) = split rng
-    es'         = mkEntityOnEmpty [CanMove, IsEvil] rng es
+    es'         = mkEntityOnEmpty [CanMove, HasHealth 3, IsEvil] rng es
 
   mkItems = mkItems' (5 :: Integer)
   mkItems' 0 _ es = es
@@ -293,7 +293,7 @@ systems =
   , def
     { qualifier = (\cs -> isPlayer cs && hasHealth cs) . view components
     , everyTick = \_ e g ->
-      over message (++ ["You have " <> (show . getHealth) e <> "HP."]) g
+      over message (++ ["you have " <> (show . getHealth) e <> " hp"]) g
     }
     -- render wall
   , def { qualifier = isWall . view components, buildRepr = \_ _ -> WallTile }
@@ -352,7 +352,7 @@ systems =
     }
   ]
  where
-   -- This has to prevent entities from walking on walls
+   -- This has to prevent entities from walking on certain things
   fromMoveCommand c es e =
     let newEntity = case c of
           North -> over posY (subtract 1) e
@@ -362,8 +362,9 @@ systems =
           _     -> e
         newPos = (newEntity ^. posX, newEntity ^. posY)
     in  if any
+             -- BUG doesn't work if both entities are moving?
              (\e' ->
-               Set.member IsWall (e' ^. components)
+               (hasHealth (e' ^. components) || isWall (e' ^. components))
                  && ((e' ^. posX, e' ^. posY) == newPos)
              )
              es
@@ -392,7 +393,7 @@ getGrid =
 
 
 executeStep :: GameState -> GameState
-executeStep = set message [] . (compose . map runSystemET) systems
+executeStep = (compose . map runSystemET) systems . set message []
 
 step :: (EntityGrid -> a) -> State GameState a
 step render = do

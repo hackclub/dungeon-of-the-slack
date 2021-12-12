@@ -238,8 +238,9 @@ stepAndSendEmoji
   -> GameState
   -> IO (Text, GameState)
 stepAndSendEmoji session token channelId edit cmd gameState = do
-  let (text, newState) =
+  let (renderedGrid, newState) =
         runState (step renderGridEmoji) $ setCommand cmd gameState
+      text = (unlines . view message $ gameState) <> "\n" <> renderedGrid
   case edit of
     Nothing -> do
       timestamp <-
@@ -290,6 +291,9 @@ handleMsgEmoji session token channelId timestamp gsRef msg = do
 -- main
 -------
 
+
+-- hack club is using emoji mode currently
+-- it is seemingly faster but requires one to have the custom emojis
 
 main :: IO ()
 main = do
