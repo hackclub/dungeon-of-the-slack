@@ -37,5 +37,8 @@ m2l = Vec.toList . Vec.map Vec.toList . fromMatrix
 l2m :: [[a]] -> Matrix a
 l2m = Matrix . Vec.fromList . map Vec.fromList
 
+mget :: Int -> Int -> Matrix a -> a
+mget x y = (!! x) . (!! y) . m2l
+
 mset :: Int -> Int -> a -> Matrix a -> Matrix a
 mset x y e = l2m . over (ix y) (& ix x .~ e) . m2l

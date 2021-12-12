@@ -8,12 +8,14 @@ dependencies:
   - wreq
   - wuss
 
+  # only useful for image mode
   - file-embed
   - JuicyPixels
 
   - aeson
   - aeson-pretty
   - astar
+  - async
   - base64
   - containers
   - data-default
@@ -22,6 +24,7 @@ dependencies:
   - lens
   - megaparsec
   - random
+  - split
 library:
   source-dirs: .
   exposed-modules:

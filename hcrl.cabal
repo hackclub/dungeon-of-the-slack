@@ -26,6 +26,7 @@ library
     , aeson
     , aeson-pretty
     , astar
+    , async
     , base >=4.14 && <5
     , base64
     , containers
@@ -37,6 +38,7 @@ library
     , megaparsec
     , random
     , relude
+    , split
     , websockets
     , wreq
     , wuss
@@ -57,6 +59,7 @@ executable hcrl
     , aeson
     , aeson-pretty
     , astar
+    , async
     , base >=4.14 && <5
     , base64
     , containers
@@ -68,6 +71,7 @@ executable hcrl
     , megaparsec
     , random
     , relude
+    , split
     , websockets
     , wreq
     , wuss

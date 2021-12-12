@@ -14,7 +14,8 @@ module Game
   , Entity
   , EntityGrid
   , Command(..)
-  , GameState
+  , GameState(..)
+  , message
   , Tile(..)
   , represent
   , setCommand
@@ -35,10 +36,27 @@ import qualified Data.Vector.Fixed             as Vec
 import           System.Random
 
 
-data Component = CanMove | IsWall | IsDoor | IsPotion Effect | IsEvil | IsPlayer deriving (Eq, Ord)
+data Component =
+    CanMove
+  | HasHealth Int
+  | IsWall
+  | IsDoor
+  | IsPotion Effect
+  | IsEvil
+  | IsPlayer
+  deriving (Eq, Ord)
 
 data Effect = Effect
   deriving (Eq, Ord)
+
+data Entity = Entity
+  { _posX       :: Int
+  , _posY       :: Int
+  , _components :: Set Component
+  }
+  deriving Eq
+
+makeLenses ''Entity
 
 -- TODO use th or something?
 canMove :: Set Component -> Bool
@@ -46,6 +64,12 @@ canMove = any
   (\case
     CanMove -> True
     _       -> False
+  )
+hasHealth :: Set Component -> Bool
+hasHealth = any
+  (\case
+    HasHealth _ -> True
+    _           -> False
   )
 isPlayer :: Set Component -> Bool
 isPlayer = any
@@ -78,19 +102,19 @@ isPotion = any
     _          -> False
   )
 
+getHealth :: Entity -> Int
+getHealth =
+  head
+    . concatMap
+        (\case
+          HasHealth h -> [h]
+          _           -> []
+        )
+    . view components
+
 randomItemComponents :: StdGen -> Set Component
 randomItemComponents rng =
   fromList [randomChoice [IsPotion (randomChoice [Effect] rng)] rng]
-
-
-data Entity = Entity
-  { _posX       :: Int
-  , _posY       :: Int
-  , _components :: Set Component
-  }
-  deriving Eq
-
-makeLenses ''Entity
 
 
 type EntityGrid = Matrix (Maybe Entity)
@@ -106,6 +130,7 @@ data GameState = GameState
   { gameRNG   :: StdGen
   , _entities :: [Entity]
   , _command  :: Command
+  , _message  :: [Text]
   }
 
 makeLenses ''GameState
@@ -124,6 +149,7 @@ mkGameState cmd = do
         )
         []
     , _command  = cmd
+    , _message  = []
     }
  where
   randomCoord       = randomR (0 :: Int, matrixSize - 1)
@@ -137,7 +163,7 @@ mkGameState cmd = do
     (x, rng'  ) = randomCoord rng
     (y, newRNG) = randomCoord rng'
 
-  mkPlayer = mkEntityOnEmpty [CanMove, IsPlayer]
+  mkPlayer = mkEntityOnEmpty [CanMove, HasHealth 10, IsPlayer]
 
   mkEvil   = mkEvil' (5 :: Integer)
   mkEvil' 0 _   es = es
@@ -263,6 +289,12 @@ systems =
     , everyTick = \c e g ->
       (over entities $ replace e $ fromMoveCommand c (g ^. entities) e) g
     }
+    -- display player hp
+  , def
+    { qualifier = (\cs -> isPlayer cs && hasHealth cs) . view components
+    , everyTick = \_ e g ->
+      over message (++ ["You have " <> (show . getHealth) e <> "HP."]) g
+    }
     -- render wall
   , def { qualifier = isWall . view components, buildRepr = \_ _ -> WallTile }
     -- render door
@@ -275,7 +307,6 @@ systems =
     , everyTick = \_ e g ->
       (over entities $ replace
           e
-        -- \ $ fromMoveCommand
           (case
               gridAStar
                 (g ^. entities)
@@ -284,15 +315,9 @@ systems =
                   (head . filter (isPlayer . view components) $ g ^. entities)
                 )
             of
-              -- Just ((x, y) : _) -> traceShowId $ coordAsCommand
-              --   (trace (show (x, y) <> " " <> show (e ^. posX, e ^. posY)) (x, y))
-              --   e
-              -- _ -> Noop
               Just ((x, y) : _) -> e & posX .~ x & posY .~ y
               _                 -> e
           )
-          -- (g ^. entities)
-          -- e
         )
         g
     }
@@ -327,12 +352,6 @@ systems =
     }
   ]
  where
-  -- coordAsCommand (x, y) e | (x, y) == (x' - 1, y') = North
-  --                         | (x, y) == (x', y' + 1) = East
-  --                         | (x, y) == (x' + 1, y') = South
-  --                         | (x, y) == (x', y' - 1) = West
-  --                         | otherwise              = Noop
-  --   where (x', y') = (e ^. posX, e ^. posY)
    -- This has to prevent entities from walking on walls
   fromMoveCommand c es e =
     let newEntity = case c of
@@ -373,7 +392,7 @@ getGrid =
 
 
 executeStep :: GameState -> GameState
-executeStep = (compose . map runSystemET) systems
+executeStep = set message [] . (compose . map runSystemET) systems
 
 step :: (EntityGrid -> a) -> State GameState a
 step render = do

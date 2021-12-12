@@ -9,9 +9,11 @@ module Slack
   , SocketEventContent(..)
   , SocketEventResContent(..)
   , getChannelId
-  -- , sendMessage
-  , sendMessageFile
-  , editMessageFile
+  , sendMessage
+  -- , sendMessageFile
+  , editMessage
+  -- , editMessageFile
+  , MessageBlocks(..)
   , reactToMessage
   ) where
 
@@ -25,13 +27,16 @@ import           Relude                  hiding ( error
 import           Control.Lens            hiding ( (.=) )
 import           Data.Aeson
 import           Data.Aeson.Encode.Pretty
+import           Data.Default
 import           Network.Wreq
+import qualified Network.Wreq.Session          as S
+import           Network.Wreq.Session           ( Session )
 
 import           Text.Megaparsec         hiding ( token )
 import           Text.Megaparsec.Char
 
-import           Data.ByteString.Base64         ( encodeBase64 )
-import           Network.WebSockets
+-- import           Data.ByteString.Base64         ( encodeBase64 )
+import           Network.WebSockets      hiding ( Message )
 import           Wuss
 
 
@@ -149,10 +154,11 @@ wsClient handleMsg conn = do
                 (encode $ SocketEventRes { outEnvId = id_, resContent = res })
 
 
-wsConnect :: Text -> EventHandler -> IO ()
-wsConnect wsToken handle = do
-  getURLRes <- asJSON =<< postWith
+wsConnect :: Session -> Text -> EventHandler -> IO ()
+wsConnect session wsToken handle = do
+  getURLRes <- asJSON =<< S.postWith
     (defaults & header "Authorization" .~ ["Bearer " <> encodeUtf8 wsToken])
+    session
     "https://slack.com/api/apps.connections.open"
     ([] :: [FormParam])
 
@@ -177,11 +183,59 @@ wsConnect wsToken handle = do
 -- HTTP requests
 ----------------
 
+-- utilities for constructing json
+
+array :: [Value] -> Value
+array = Array . fromList
+
 
 newtype ChannelList = ChannelList { channels :: [Channel] }
 instance FromJSON ChannelList where
   parseJSON =
     withObject "ChannelList" $ (return . ChannelList) <=< (.: "channels")
+
+data MessageBlocks = MessageBlocks
+  { blkText     :: Maybe Text
+  , blkImageURL :: Maybe Text
+  , blkImageAlt :: Maybe Text
+  , blkActionID :: Maybe Text
+  , blkButtons  :: [Text]
+  }
+  deriving Generic
+instance ToJSON MessageBlocks where
+  toJSON (MessageBlocks bt biu bia baid bbs) = array
+    (textJSON <> imageJSON <> btnsJSON)   where
+    textJSON = case bt of
+      Just t ->
+        [ object
+            [ ("type", "section")
+            , ("text", object [("type", "mrkdwn"), ("text", String t)])
+            ]
+        ]
+      Nothing -> []
+    imageJSON = case (biu, bia) of
+      (Just iu, Just ia) ->
+        [ object
+            [ ("type"     , "image")
+            , ("image_url", String iu)
+            , ("alt_text" , String ia)
+            ]
+        ]
+      _ -> []
+    btnsJSON = case baid of
+      Just aid ->
+        [ object
+            [ ("type"    , "actions")
+            , ("block_id", String aid)
+            , ("elements", array (map toButtonJSON bbs))
+            ]
+        ]
+      Nothing -> []
+    toButtonJSON b = object
+      [ ("type", "button")
+      , ("text", object [("type", "mrkdwn"), ("text", String b)])
+      ]
+instance Default MessageBlocks
 
 data SendFileRes = SendFileRes
   { fileID    :: Text
@@ -200,16 +254,16 @@ instance FromJSON SendFileRes where
       timestamp'    <- case shareIfExists of
         Just s  -> s .: msg >>= ((.: "ts") . head)
         Nothing -> return Nothing
-        -- >>= (.: msg)
-        -- >>= ((.: "ts") . head)
       return $ SendFileRes fileID' timestamp'
     )
 
-newtype ImgBBRes = ImgBBRes { imgbbURL :: Text }
-instance FromJSON ImgBBRes where
-  parseJSON = withObject
-    "ImgBBRes"
-    (\o -> o .: "data" >>= (.: "url") >>= return . ImgBBRes)
+newtype SendMsgRes = SendMsgRes
+  {
+  msgTimestamp :: Maybe Text
+  }
+  deriving Show
+instance FromJSON SendMsgRes where
+  parseJSON = withObject "SendMsgRes" ((.: "ts") >=> return . SendMsgRes)
 
 data Channel = Channel
   { chanName :: Text
@@ -221,9 +275,9 @@ instance FromJSON Channel where
     chanId'   <- v .: "id"
     return $ Channel { chanName = chanName', chanId = chanId' }
 
-getChannelId :: Text -> Text -> IO Text
-getChannelId token name = do
-  chanListRes <- getWith
+getChannelId :: Session -> Text -> Text -> IO Text
+getChannelId session token name = do
+  chanListRes <- S.getWith
     (  defaults
     &  header "Authorization"
     .~ ["Bearer " <> encodeUtf8 token]
@@ -232,6 +286,7 @@ getChannelId token name = do
     &  param "types"
     .~ ["public_channel", "private_channel"]
     )
+    session
     "https://slack.com/api/conversations.list"
   case eitherDecode (chanListRes ^. responseBody) of
     Left e ->
@@ -244,53 +299,40 @@ getChannelId token name = do
       return . chanId . head . filter ((== name) . chanName) . channels $ cl
 
 
--- sendMessage :: Text -> Text -> Text -> IO ()
--- sendMessage token channelId msgContent = void $ post
---   "https://slack.com/api/chat.postMessage"
---   ["token" := token, "channel" := channelId, "text" := msgContent]
-
 -- returns timestamp
-sendMessageFile :: Text -> Text -> ByteString -> IO (Maybe Text)
-sendMessageFile token channelId msgContent = do
-  res <- post
-    "https://slack.com/api/files.upload"
-    ["token" := token, "channels" := channelId, "content" := msgContent]
+sendMessage
+  :: Session -> Text -> Text -> Either Text MessageBlocks -> IO (Maybe Text)
+sendMessage session token channelId content' = do
+  res <- S.postWith
+    (defaults & header "Authorization" .~ ["Bearer " <> encodeUtf8 token])
+    session
+    "https://slack.com/api/chat.postMessage"
+    (object [("channel", String channelId), contentKV])
+
   case eitherDecode (res ^. responseBody) of
     Left e -> die (e <> "\n" <> (decodeUtf8 . view responseBody) res)
-    Right (SendFileRes _ s) -> return s
+    Right (SendMsgRes s) -> return s
 
-editMessageFile :: Text -> Text -> Text -> Text -> ByteString -> IO ()
-editMessageFile token channelId imgbb timestamp' msgContent = do
-  imgBBRes <- post "https://api.imgbb.com/1/upload"
-                   ["key" := imgbb, "image" := encodeBase64 msgContent]
-  url' <- case eitherDecode (imgBBRes ^. responseBody) of
-    Left  e               -> die e
-    Right (ImgBBRes url') -> return url'
+ where
+  contentKV = case content' of
+    Left  t  -> ("text", String t)
+    Right mb -> ("blocks", toJSON mb)
 
-  void $ postWith
-    (defaults & header "Authorization" .~ ["Bearer " <> encodeUtf8 token])
-    "https://slack.com/api/chat.update"
-    (object
-      [ ("channel", String channelId)
-      , ("ts"     , String timestamp')
-      , ( "blocks"
-        , Array
-          (fromList
-            [ object
-                [ ("type"     , "image")
-                , ("image_url", String url')
-                , ("alt_text" , "a fearsome dungeon")
-                ]
-            ]
-          )
-        )
-      , ("file_ids", Array empty)
-      , ("text"    , String "...")
-      ]
-    )
+editMessage
+  :: Session -> Text -> Text -> Text -> Either Text MessageBlocks -> IO ()
+editMessage session token channelId timestamp' content' = void $ S.postWith
+  (defaults & header "Authorization" .~ ["Bearer " <> encodeUtf8 token])
+  session
+  "https://slack.com/api/chat.update"
+  (object [("channel", String channelId), ("ts", String timestamp'), contentKV])
+ where
+  contentKV = case content' of
+    Left  t  -> ("text", String t)
+    Right mb -> ("blocks", toJSON mb)
 
-reactToMessage :: Text -> Text -> Text -> Text -> IO ()
-reactToMessage token channelId timestamp' emoji = void $ post
+reactToMessage :: Session -> Text -> Text -> Text -> Text -> IO ()
+reactToMessage session token channelId timestamp' emoji = void $ S.post
+  session
   "https://slack.com/api/reactions.add"
   [ "token" := token
   , "channel" := channelId
