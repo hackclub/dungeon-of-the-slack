@@ -46,6 +46,20 @@ import           System.Environment
 ourUserId :: Text
 ourUserId = "U02MTTW1XND"
 
+addReacts :: Session -> Text -> Text -> Text -> IO ()
+addReacts session token channelId timestamp = void . forkIO $ mapConcurrently_
+  (reactToMessage session token channelId timestamp)
+  ["tw_arrow_up", "tw_arrow_right", "tw_arrow_down", "tw_arrow_left", "tw_tea"]
+
+fromReact :: Text -> Command
+fromReact = \case
+  "tw_arrow_up"    -> North
+  "tw_arrow_right" -> East
+  "tw_arrow_down"  -> South
+  "tw_arrow_left"  -> West
+  "tw_tea"         -> Drink
+  _                -> Noop
+
 
 -- image mode
 -------------
@@ -141,14 +155,7 @@ stepAndSendImg session token channelId imgbb edit cmd gameState = do
           )
         >>= return
         .   fromJust
-      mapM_
-        (reactToMessage session token channelId timestamp)
-        [ "tw_arrow_up"
-        , "tw_arrow_right"
-        , "tw_arrow_down"
-        , "tw_arrow_left"
-        , "tw_tea"
-        ]
+      addReacts session token channelId timestamp
       return (timestamp, newState)
     Just timestamp -> do
       (void . forkIO) $ editMessage
@@ -171,13 +178,7 @@ handleMsgImg session token channelId imgbb timestamp gsRef msg = do
     ReactionAdd e u -> if u == ourUserId
       then return BasicRes
       else do
-        let cmd = case e of
-              "tw_arrow_up"    -> North
-              "tw_arrow_right" -> East
-              "tw_arrow_down"  -> South
-              "tw_arrow_left"  -> West
-              "tw_tea"         -> Drink
-              _                -> Noop
+        let cmd = fromReact e
         (_, newState) <-
           readIORef gsRef
             >>= stepAndSendImg session
@@ -245,14 +246,7 @@ stepAndSendEmoji session token channelId edit cmd gameState = do
     Nothing -> do
       timestamp <-
         sendMessage session token channelId (Left text) >>= return . fromJust
-      void . forkIO $ mapConcurrently_
-        (reactToMessage session token channelId timestamp)
-        [ "tw_arrow_up"
-        , "tw_arrow_right"
-        , "tw_arrow_down"
-        , "tw_arrow_left"
-        , "tw_tea"
-        ]
+      addReacts session token channelId timestamp
       return (timestamp, newState)
     Just timestamp -> do
       void . forkIO $ editMessage session token channelId timestamp (Left text)
@@ -267,13 +261,7 @@ handleMsgEmoji session token channelId timestamp gsRef msg = do
     ReactionAdd e u -> if u == ourUserId
       then return BasicRes
       else do
-        let cmd = case e of
-              "tw_arrow_up"    -> North
-              "tw_arrow_right" -> East
-              "tw_arrow_down"  -> South
-              "tw_arrow_left"  -> West
-              "tw_tea"         -> Drink
-              _                -> Noop
+        let cmd = fromReact e
         (_, newState) <-
           readIORef gsRef
             >>= stepAndSendEmoji session token channelId (Just timestamp) cmd
