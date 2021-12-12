@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 
-name:           hcrl
+name:           rogue
 version:        0.0.0
 license:        MIT
 license-file:   LICENSE
@@ -17,7 +17,7 @@ library
   other-modules:
       Main
       Utils
-      Paths_hcrl
+      Paths_rogue
   hs-source-dirs:
       ./
   ghc-options: -O2 -Wall
@@ -44,13 +44,13 @@ library
     , wuss
   default-language: Haskell2010
 
-executable hcrl
+executable rogue
   main-is: Main.hs
   other-modules:
       Game
       Slack
       Utils
-      Paths_hcrl
+      Paths_rogue
   hs-source-dirs:
       ./
   ghc-options: -O2 -Wall
