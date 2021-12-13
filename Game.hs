@@ -373,7 +373,7 @@ systems =
    where
     hasHealthAtLoc =
       filter (\e' -> hasHealth (e' ^. components) && sameLoc e') es
-    sameLoc e' = (e' ^. posX, e ^. posY) == (x, y)
+    sameLoc e' = (e' ^. posX, e' ^. posY) == (x, y)
   fromMoveCommand c es e =
     (case c of
         North -> attemptMove (e ^. posX) (e ^. posY - 1)
