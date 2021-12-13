@@ -112,6 +112,16 @@ getHealth =
         )
     . view components
 
+setHealth :: Int -> Entity -> Entity
+setHealth n = over
+  components
+  (Set.map
+    (\case
+      HasHealth _ -> HasHealth n
+      c           -> c
+    )
+  )
+
 randomItemComponents :: StdGen -> Set Component
 randomItemComponents rng =
   fromList [randomChoice [IsPotion (randomChoice [Effect] rng)] rng]
@@ -287,7 +297,7 @@ systems =
   , def
     { qualifier = (\cs -> isPlayer cs && canMove cs) . view components
     , everyTick = \c e g ->
-      (over entities $ replace e $ fromMoveCommand c (g ^. entities) e) g
+                    (set entities $ fromMoveCommand c (g ^. entities) e) g
     }
     -- display player hp
   , def
@@ -301,12 +311,12 @@ systems =
   , def { qualifier = isDoor . view components, buildRepr = \_ _ -> DoorTile }
     -- render enemy
   , def { qualifier = isEvil . view components, buildRepr = \_ _ -> EvilTile }
-    -- move enemy (TODO placeholder)
+    -- move enemy
   , def
     { qualifier = (\cs -> canMove cs && isEvil cs) . view components
     , everyTick = \_ e g ->
-      (over entities $ replace
-          e
+      (over
+          entities
           (case
               gridAStar
                 (g ^. entities)
@@ -315,8 +325,8 @@ systems =
                   (head . filter (isPlayer . view components) $ g ^. entities)
                 )
             of
-              Just ((x, y) : _) -> e & posX .~ x & posY .~ y
-              _                 -> e
+              Just ((x, y) : _) -> flip (attemptMove x y) e
+              _                 -> id
           )
         )
         g
@@ -353,23 +363,27 @@ systems =
   ]
  where
    -- This has to prevent entities from walking on certain things
+  attemptMove x y es e =
+    let newEntity = (set posY y . set posX x) e
+    in  case hasHealthAtLoc of
+          e' : _ -> replace e' (setHealth (getHealth e' - 1) e') es
+          []     -> if any (\e' -> isWall (e' ^. components) && sameLoc e') es
+            then es
+            else replace e newEntity es
+   where
+    hasHealthAtLoc =
+      filter (\e' -> hasHealth (e' ^. components) && sameLoc e') es
+    sameLoc e' = (e' ^. posX, e ^. posY) == (x, y)
   fromMoveCommand c es e =
-    let newEntity = case c of
-          North -> over posY (subtract 1) e
-          East  -> over posX (+ 1) e
-          South -> over posY (+ 1) e
-          West  -> over posX (subtract 1) e
-          _     -> e
-        newPos = (newEntity ^. posX, newEntity ^. posY)
-    in  if any
-             -- BUG doesn't work if both entities are moving?
-             (\e' ->
-               (hasHealth (e' ^. components) || isWall (e' ^. components))
-                 && ((e' ^. posX, e' ^. posY) == newPos)
-             )
-             es
-          then e
-          else newEntity
+    (case c of
+        North -> attemptMove (e ^. posX) (e ^. posY - 1)
+        East  -> attemptMove (e ^. posX + 1) (e ^. posY)
+        South -> attemptMove (e ^. posX) (e ^. posY + 1)
+        West  -> attemptMove (e ^. posX - 1) (e ^. posY)
+        _     -> const
+      )
+      es
+      e
 
 represent :: Entity -> Tile
 represent e =
