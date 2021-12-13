@@ -17,6 +17,10 @@ replace x y = map (\o -> if o == x then y else o)
 randomChoice :: [a] -> StdGen -> a
 randomChoice xs rng = xs !! n where n = fst $ randomR (0, length xs - 1) rng
 
+(&&$), (||$) :: (a -> Bool) -> (a -> Bool) -> a -> Bool
+(&&$) f g x = f x && g x
+(||$) f g x = f x || g x
+
 
 -- Matrix
 ---------

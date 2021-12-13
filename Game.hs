@@ -8,18 +8,17 @@
 module Game
   ( mkEntityGrid
   , mkGameState
-  , components
-  , isDoor
-  , isWall
+  , step
   , Entity
   , EntityGrid
   , Command(..)
   , GameState(..)
-  , message
   , Tile(..)
+  , getMessage
   , represent
   , setCommand
-  , step
+  , isDoor
+  , isWall
   ) where
 
 import           Prelude                        ( head )
@@ -46,9 +45,12 @@ data Component =
   | IsPlayer
   deriving (Eq, Ord)
 
+-- TODO placeholder
 data Effect = Effect
   deriving (Eq, Ord)
 
+-- TODO location could be a component!
+--      this would allow for eg inventory items
 data Entity = Entity
   { _posX       :: Int
   , _posY       :: Int
@@ -59,48 +61,57 @@ data Entity = Entity
 makeLenses ''Entity
 
 -- TODO use th or something?
-canMove :: Set Component -> Bool
-canMove = any
-  (\case
-    CanMove -> True
-    _       -> False
-  )
-hasHealth :: Set Component -> Bool
-hasHealth = any
-  (\case
-    HasHealth _ -> True
-    _           -> False
-  )
-isPlayer :: Set Component -> Bool
-isPlayer = any
-  (\case
-    IsPlayer -> True
-    _        -> False
-  )
-isWall :: Set Component -> Bool
-isWall = any
-  (\case
-    IsWall -> True
-    _      -> False
-  )
-isDoor :: Set Component -> Bool
-isDoor = any
-  (\case
-    IsDoor -> True
-    _      -> False
-  )
-isEvil :: Set Component -> Bool
-isEvil = any
-  (\case
-    IsEvil -> True
-    _      -> False
-  )
-isPotion :: Set Component -> Bool
-isPotion = any
-  (\case
-    IsPotion _ -> True
-    _          -> False
-  )
+canMove, hasHealth, isPlayer, isWall, isDoor, isEvil, isPotion
+  :: Entity -> Bool
+canMove =
+  any
+      (\case
+        CanMove -> True
+        _       -> False
+      )
+    . view components
+hasHealth =
+  any
+      (\case
+        HasHealth _ -> True
+        _           -> False
+      )
+    . view components
+isPlayer =
+  any
+      (\case
+        IsPlayer -> True
+        _        -> False
+      )
+    . view components
+isWall =
+  any
+      (\case
+        IsWall -> True
+        _      -> False
+      )
+    . view components
+isDoor =
+  any
+      (\case
+        IsDoor -> True
+        _      -> False
+      )
+    . view components
+isEvil =
+  any
+      (\case
+        IsEvil -> True
+        _      -> False
+      )
+    . view components
+isPotion =
+  any
+      (\case
+        IsPotion _ -> True
+        _          -> False
+      )
+    . view components
 
 getHealth :: Entity -> Int
 getHealth =
@@ -145,15 +156,17 @@ data GameState = GameState
 
 makeLenses ''GameState
 
+getMessage :: GameState -> [Text]
+getMessage = view message
+
+setCommand :: Command -> GameState -> GameState
+setCommand = set command
+
 mkGameState :: Command -> IO GameState
 mkGameState cmd = do
-  -- rng <- getStdGen
-  -- -- lmao
-  -- let (rng', (rngWalls, (rngPlayer, rngItems))) =
-  --       ((fmap (fmap split . split) . split)) rng
   [rng, rngWalls, rngPlayer, rngEvil, rngItems] <- replicateM 5 newStdGen
   return $ GameState
-    { gameRNG   = rng -- rng'
+    { gameRNG   = rng
     , _entities =
       (mkPlayer rngPlayer . mkItems rngItems . mkEvil rngEvil . mkWalls rngWalls
         )
@@ -245,11 +258,9 @@ mkGameState cmd = do
         _ -> mkWalls' (n - 1) rng'' es
 
 
-setCommand :: Command -> GameState -> GameState
-setCommand = set command
-
-
-data Tile = DefaultTile | PlayerTile | WallTile | DoorTile | EvilTile | PotionTile deriving Eq
+-- types of tiles that the renderer should use
+-- (corresponding representations/images aren't actually provided in Game.hs)
+data Tile = DefaultTile | PlayerTile | WallTile | DoorTile | EvilTile | PotionTile
 
 data System = System
   { qualifier :: Entity -> Bool
@@ -269,6 +280,7 @@ runSystemET s gs = (foldl' (.) id . map (everyTick s $ gs ^. command))
   (filter (qualifier s) (gs ^. entities))
   gs
 
+-- a* for our entity list
 gridAStar :: [Entity] -> (Int, Int) -> (Int, Int) -> Maybe [(Int, Int)]
 gridAStar es begin dest = aStar getNeighbors
                                 (\_ _ -> 1)
@@ -278,112 +290,102 @@ gridAStar es begin dest = aStar getNeighbors
  where
   getNeighbors (x, y) =
     (fromList . filter
-        (\(x', y') -> none
-          (\e ->
-            e ^. posX == x' && e ^. posY == y' && (isWall . view components) e
-          )
-          es
+        (\(x', y') ->
+          none (\e -> e ^. posX == x' && e ^. posY == y' && isWall e) es
         )
       )
       [(x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)]
 
+-- this has to prevent entities from walking on certain things
+attemptMove :: Int -> Int -> [Entity] -> Entity -> [Entity]
+attemptMove x y es e =
+  let newEntity = (set posY y . set posX x) e
+  in  case hasHealthAtLoc of
+        e' : _ -> replace e' (setHealth (getHealth e' - 1) e') es
+        []     -> if any (\e' -> isWall e' && sameLoc e') es
+          then es
+          else replace e newEntity es
+ where
+  hasHealthAtLoc = filter (\e' -> hasHealth e' && sameLoc e') es
+  sameLoc e' = (e' ^. posX, e' ^. posY) == (x, y)
+
+fromMoveCommand :: Command -> [Entity] -> Entity -> [Entity]
+fromMoveCommand c es e =
+  (case c of
+      North -> attemptMove (e ^. posX) (e ^. posY - 1)
+      East  -> attemptMove (e ^. posX + 1) (e ^. posY)
+      South -> attemptMove (e ^. posX) (e ^. posY + 1)
+      West  -> attemptMove (e ^. posX - 1) (e ^. posY)
+      _     -> const
+    )
+    es
+    e
+
+moveEvil :: System
+moveEvil = def
+  { qualifier = canMove &&$ isEvil
+  , everyTick = \_ e g -> over
+    entities
+    (case
+        gridAStar
+          (g ^. entities)
+          (e ^. posX, e ^. posY)
+          ((\e' -> (e' ^. posX, e' ^. posY))
+            (head . filter isPlayer $ g ^. entities)
+          )
+      of
+        Just ((x, y) : _) -> flip (attemptMove x y) e
+        _                 -> id
+    )
+    g
+  }
+
+drinkPotion :: System
+drinkPotion = def
+  { qualifier = isPlayer
+  , everyTick = \c e g -> if c == Drink
+    then
+      case
+        filter
+          (\e' ->
+            e ^. posX == e' ^. posX && e ^. posY == e' ^. posY && isPotion e'
+          )
+          (g ^. entities)
+      of
+        []    -> g -- drinking nothing doesn't do very much
+        p : _ -> over entities (delete p) g -- TODO apply effect
+    else g
+  }
+
 systems :: [System]
 systems =
   [ -- render player
-    def { qualifier = isPlayer . view components
-        , buildRepr = \_ _ -> PlayerTile
-        }
+    def { qualifier = isPlayer, buildRepr = \_ _ -> PlayerTile }
     -- move player
   , def
-    { qualifier = (\cs -> isPlayer cs && canMove cs) . view components
+    { qualifier = isPlayer &&$ canMove
     , everyTick = \c e g ->
                     (set entities $ fromMoveCommand c (g ^. entities) e) g
     }
     -- display player hp
   , def
-    { qualifier = (\cs -> isPlayer cs && hasHealth cs) . view components
+    { qualifier = isPlayer &&$ hasHealth
     , everyTick = \_ e g ->
       over message (++ ["you have " <> (show . getHealth) e <> " hp"]) g
     }
     -- render wall
-  , def { qualifier = isWall . view components, buildRepr = \_ _ -> WallTile }
+  , def { qualifier = isWall, buildRepr = \_ _ -> WallTile }
     -- render door
-  , def { qualifier = isDoor . view components, buildRepr = \_ _ -> DoorTile }
+  , def { qualifier = isDoor, buildRepr = \_ _ -> DoorTile }
     -- render enemy
-  , def { qualifier = isEvil . view components, buildRepr = \_ _ -> EvilTile }
+  , def { qualifier = isEvil, buildRepr = \_ _ -> EvilTile }
     -- move enemy
-  , def
-    { qualifier = (\cs -> canMove cs && isEvil cs) . view components
-    , everyTick = \_ e g ->
-      (over
-          entities
-          (case
-              gridAStar
-                (g ^. entities)
-                (e ^. posX, e ^. posY)
-                ((\e' -> (e' ^. posX, e' ^. posY))
-                  (head . filter (isPlayer . view components) $ g ^. entities)
-                )
-            of
-              Just ((x, y) : _) -> flip (attemptMove x y) e
-              _                 -> id
-          )
-        )
-        g
-    }
+  , moveEvil
     -- render potion
-  , def { qualifier = isPotion . view components
-        , buildRepr = \_ _ -> PotionTile
-        }
+  , def { qualifier = isPotion, buildRepr = \_ _ -> PotionTile }
     -- drink potion
-    -- TODO better way to formulate this?
-  , def
-    { qualifier = isPlayer . view components
-    , everyTick = \c e g -> if c == Drink
-                    then
-                      case
-                        filter
-                          (\e' ->
-                            e
-                              ^. posX
-                              == e'
-                              ^. posX
-                              && e
-                              ^. posY
-                              == e'
-                              ^. posY
-                              && (isPotion . view components) e'
-                          )
-                          (g ^. entities)
-                      of
-                        []    -> g -- drinking nothing doesn't do very much
-                        p : _ -> over entities (delete p) g -- TODO apply effect
-                    else g
-    }
+  , drinkPotion
   ]
- where
-   -- This has to prevent entities from walking on certain things
-  attemptMove x y es e =
-    let newEntity = (set posY y . set posX x) e
-    in  case hasHealthAtLoc of
-          e' : _ -> replace e' (setHealth (getHealth e' - 1) e') es
-          []     -> if any (\e' -> isWall (e' ^. components) && sameLoc e') es
-            then es
-            else replace e newEntity es
-   where
-    hasHealthAtLoc =
-      filter (\e' -> hasHealth (e' ^. components) && sameLoc e') es
-    sameLoc e' = (e' ^. posX, e' ^. posY) == (x, y)
-  fromMoveCommand c es e =
-    (case c of
-        North -> attemptMove (e ^. posX) (e ^. posY - 1)
-        East  -> attemptMove (e ^. posX + 1) (e ^. posY)
-        South -> attemptMove (e ^. posX) (e ^. posY + 1)
-        West  -> attemptMove (e ^. posX - 1) (e ^. posY)
-        _     -> const
-      )
-      es
-      e
 
 represent :: Entity -> Tile
 represent e =
@@ -404,7 +406,6 @@ getGrid =
     . sortOn (Down . view components)
     . (^. entities)
   where setEntity e = mset (e ^. posX) (e ^. posY) (Just e)
-
 
 executeStep :: GameState -> GameState
 executeStep = (compose . map runSystemET) systems . set message []

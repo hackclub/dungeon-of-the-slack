@@ -20,7 +20,6 @@ import qualified Network.Wreq.Session          as S
 import           Network.Wreq.Session           ( Session )
 
 import           Control.Concurrent             ( forkIO )
-import           Control.Lens                   ( view )
 import           Data.List.Split                ( chunksOf )
 import           Data.Maybe                     ( fromJust )
 import           System.Environment             ( lookupEnv )
@@ -53,8 +52,7 @@ renderGrid es =
   fromCoord (x, y) = (fromEntityRepr vertical . fmap represent) (mget x y es)
    where
     isWallOrDoor x' y' =
-      maybe False ((\e -> isWall e || isDoor e) . view components)
-        $ mget x' y' es
+      maybe False (\e -> isWall e || isDoor e) $ mget x' y' es
     safeInc a = if a < matrixSize - 1 then a + 1 else a
     safeDec a = if a > 0 then a - 1 else a
     vertical =
@@ -82,7 +80,7 @@ stepAndSend
 stepAndSend session token channelId edit cmd gameState = do
   let (renderedGrid, newState) =
         runState (step renderGrid) $ setCommand cmd gameState
-      text = (unlines . view message $ gameState) <> "\n" <> renderedGrid
+      text = (unlines . getMessage $ gameState) <> "\n" <> renderedGrid
   case edit of
     Nothing -> do
       timestamp <- sendMessage session token channelId text <&> fromJust
