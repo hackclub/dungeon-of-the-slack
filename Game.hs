@@ -266,12 +266,14 @@ data System = System
   { qualifier :: Entity -> Bool
   , everyTick :: Command -> Entity -> GameState -> GameState
   , buildRepr :: Entity -> Tile -> Tile
+  , buildName :: Entity -> Text -> Text
   }
 
 instance Default System where
   def = System { qualifier = const False
                , everyTick = \_ _ -> id
                , buildRepr = const id
+               , buildName = const id
                }
 
 -- runs a system's everyTick over all entities
@@ -298,14 +300,19 @@ gridAStar es begin dest = aStar getNeighbors
 
 -- this has to prevent entities from walking on certain things
 attemptMove :: Int -> Int -> Entity -> GameState -> GameState
-attemptMove x y e = over
-  entities
-  (\es -> case filter (hasHealth &&$ sameLoc) es of
-    e' : _ -> replace e' (setHealth (getHealth e' - 1) e') es
-    []     -> if any (\e' -> isWall e' && sameLoc e') es
-      then es
-      else replace e (set posY y . set posX x $ e) es
-  )
+attemptMove x y e g =
+  (case filter (hasHealth &&$ sameLoc) (g ^. entities) of
+      e' : _ ->
+        over message (name e <> " viciously attacks " <> name e' :)
+          . over entities (replace e' (setHealth (getHealth e' - 1) e'))
+      [] -> over
+        entities
+        (\es -> if any (isWall &&$ sameLoc) es
+          then es
+          else replace e (set posY y . set posX x $ e) es
+        )
+    )
+    g
   where sameLoc e' = (e' ^. posX, e' ^. posY) == (x, y)
 
 fromMoveCommand :: Command -> Entity -> GameState -> GameState
@@ -356,8 +363,11 @@ drinkPotion = def
 
 systems :: [System]
 systems =
-  [ -- render player
-    def { qualifier = isPlayer, buildRepr = \_ _ -> PlayerTile }
+  [ -- render and name player
+    def { qualifier = isPlayer
+        , buildRepr = \_ _ -> PlayerTile
+        , buildName = \_ _ -> "the player"
+        }
     -- move player
   , def { qualifier = isPlayer &&$ canMove, everyTick = fromMoveCommand }
     -- display player hp
@@ -370,8 +380,11 @@ systems =
   , def { qualifier = isWall, buildRepr = \_ _ -> WallTile }
     -- render door
   , def { qualifier = isDoor, buildRepr = \_ _ -> DoorTile }
-    -- render enemy
-  , def { qualifier = isEvil, buildRepr = \_ _ -> EvilTile }
+    -- render and name enemy
+  , def { qualifier = isEvil
+        , buildRepr = \_ _ -> EvilTile
+        , buildName = \_ _ -> "a rat"
+        }
     -- move enemy
   , moveEvil
     -- render potion
@@ -380,14 +393,15 @@ systems =
   , drinkPotion
   ]
 
+buildFromEntity :: (System -> Entity -> a -> a) -> a -> Entity -> a
+buildFromEntity f x e =
+  (foldl' (.) id . map (($ e) . f) . filter (($ e) . qualifier) $ systems) x
+
+name :: Entity -> Text
+name = buildFromEntity buildName "something"
+
 represent :: Entity -> Tile
-represent e =
-  ( foldl' (.) id
-    . map (($ e) . buildRepr)
-    . filter (($ e) . qualifier)
-    $ systems
-    )
-    DefaultTile
+represent = buildFromEntity buildRepr DefaultTile
 
 
 -- currently an out-of-bounds entity will just not appear
