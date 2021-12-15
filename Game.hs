@@ -297,47 +297,44 @@ gridAStar es begin dest = aStar getNeighbors
       [(x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)]
 
 -- this has to prevent entities from walking on certain things
-attemptMove :: Int -> Int -> [Entity] -> Entity -> [Entity]
-attemptMove x y es e =
-  let newEntity = (set posY y . set posX x) e
-  in  case hasHealthAtLoc of
-        e' : _ -> replace e' (setHealth (getHealth e' - 1) e') es
-        []     -> if any (\e' -> isWall e' && sameLoc e') es
-          then es
-          else replace e newEntity es
- where
-  hasHealthAtLoc = filter (\e' -> hasHealth e' && sameLoc e') es
-  sameLoc e' = (e' ^. posX, e' ^. posY) == (x, y)
+attemptMove :: Int -> Int -> Entity -> GameState -> GameState
+attemptMove x y e = over
+  entities
+  (\es -> case filter (hasHealth &&$ sameLoc) es of
+    e' : _ -> replace e' (setHealth (getHealth e' - 1) e') es
+    []     -> if any (\e' -> isWall e' && sameLoc e') es
+      then es
+      else replace e (set posY y . set posX x $ e) es
+  )
+  where sameLoc e' = (e' ^. posX, e' ^. posY) == (x, y)
 
-fromMoveCommand :: Command -> [Entity] -> Entity -> [Entity]
-fromMoveCommand c es e =
+fromMoveCommand :: Command -> Entity -> GameState -> GameState
+fromMoveCommand c e =
   (case c of
       North -> attemptMove (e ^. posX) (e ^. posY - 1)
       East  -> attemptMove (e ^. posX + 1) (e ^. posY)
       South -> attemptMove (e ^. posX) (e ^. posY + 1)
       West  -> attemptMove (e ^. posX - 1) (e ^. posY)
-      _     -> const
+      _     -> flip const
     )
-    es
     e
 
 moveEvil :: System
 moveEvil = def
   { qualifier = canMove &&$ isEvil
-  , everyTick = \_ e g -> over
-    entities
+  , everyTick = \_ e g ->
     (case
-        gridAStar
-          (g ^. entities)
-          (e ^. posX, e ^. posY)
-          ((\e' -> (e' ^. posX, e' ^. posY))
-            (head . filter isPlayer $ g ^. entities)
-          )
-      of
-        Just ((x, y) : _) -> flip (attemptMove x y) e
-        _                 -> id
-    )
-    g
+          gridAStar
+            (g ^. entities)
+            (e ^. posX, e ^. posY)
+            ((\e' -> (e' ^. posX, e' ^. posY))
+              (head . filter isPlayer $ g ^. entities)
+            )
+        of
+          Just ((x, y) : _) -> attemptMove x y e
+          _                 -> id
+      )
+      g
   }
 
 drinkPotion :: System
@@ -362,11 +359,7 @@ systems =
   [ -- render player
     def { qualifier = isPlayer, buildRepr = \_ _ -> PlayerTile }
     -- move player
-  , def
-    { qualifier = isPlayer &&$ canMove
-    , everyTick = \c e g ->
-                    (set entities $ fromMoveCommand c (g ^. entities) e) g
-    }
+  , def { qualifier = isPlayer &&$ canMove, everyTick = fromMoveCommand }
     -- display player hp
   , def
     { qualifier = isPlayer &&$ hasHealth
