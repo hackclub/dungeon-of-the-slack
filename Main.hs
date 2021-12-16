@@ -61,6 +61,7 @@ renderGrid es =
   fromEntityRepr vertical = \case
     Just DefaultTile -> ":rogue__default:"
     Just PlayerTile  -> ":rogue__player:"
+    Just GoalTile    -> ":rogue__goal:"
     Just WallTile ->
       if vertical then ":rogue__wall_vert:" else ":rogue__wall_horiz:"
     Just DoorTile ->
@@ -80,7 +81,7 @@ stepAndSend
 stepAndSend session token channelId edit cmd gameState = do
   let (renderedGrid, newState) =
         runState (step renderGrid) $ setCommand cmd gameState
-      text = (unlines . getMessage $ gameState) <> "\n" <> renderedGrid
+      text = (unlines . getMessage $ newState) <> "\n" <> renderedGrid
   case edit of
     Nothing -> do
       timestamp <- sendMessage session token channelId text <&> fromJust

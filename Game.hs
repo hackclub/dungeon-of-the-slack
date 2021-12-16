@@ -30,6 +30,7 @@ import           Control.Lens
 import           Data.Default
 import           Data.Graph.AStar
 import           Data.List                      ( delete )
+import           Data.Maybe
 import qualified Data.Set                      as Set
 import qualified Data.Vector.Fixed             as Vec
 import           System.Random
@@ -41,6 +42,7 @@ data Component =
   | IsWall
   | IsDoor
   | IsPotion Effect
+  | IsGoal
   | IsEvil
   | IsPlayer
   deriving (Eq, Ord)
@@ -61,7 +63,7 @@ data Entity = Entity
 makeLenses ''Entity
 
 -- TODO use th or something?
-canMove, hasHealth, isPlayer, isWall, isDoor, isEvil, isPotion
+canMove, hasHealth, isPlayer, isGoal, isWall, isDoor, isEvil, isPotion
   :: Entity -> Bool
 canMove =
   any
@@ -82,6 +84,13 @@ isPlayer =
       (\case
         IsPlayer -> True
         _        -> False
+      )
+    . view components
+isGoal =
+  any
+      (\case
+        IsGoal -> True
+        _      -> False
       )
     . view components
 isWall =
@@ -164,17 +173,32 @@ setCommand = set command
 
 mkGameState :: Command -> IO GameState
 mkGameState cmd = do
-  [rng, rngWalls, rngPlayer, rngEvil, rngItems] <- replicateM 5 newStdGen
-  return $ GameState
-    { gameRNG   = rng
-    , _entities =
-      (mkPlayer rngPlayer . mkItems rngItems . mkEvil rngEvil . mkWalls rngWalls
-        )
-        []
-    , _command  = cmd
-    , _message  = []
-    }
+  [rng, rngPlayer, rngGoal, rngItems, rngEvil, rngWalls] <- replicateM
+    6
+    newStdGen
+  let gameState = GameState
+        { gameRNG   = rng
+        , _entities = ( mkPlayer rngPlayer
+                      . mkGoal rngGoal
+                      . mkItems rngItems
+                      . mkEvil rngEvil
+                      . mkWalls rngWalls
+                      )
+                        []
+        , _command  = cmd
+        , _message  = []
+        }
+      entities' = gameState ^. entities
+  case
+      gridAStar entities'
+                (findCoords isPlayer entities')
+                (findCoords isGoal entities')
+    of
+      Just _  -> return gameState
+      Nothing -> mkGameState cmd
  where
+  findCoords f = getCoords . fromJust . find f
+  getCoords e = (e ^. posX, e ^. posY)
   randomCoord       = randomR (0 :: Int, matrixSize - 1)
   randomCoordNoEdge = randomR (1 :: Int, matrixSize - 2)
 
@@ -188,19 +212,21 @@ mkGameState cmd = do
 
   mkPlayer = mkEntityOnEmpty [CanMove, HasHealth 10, IsPlayer]
 
-  mkEvil   = mkEvil' (5 :: Integer)
-  mkEvil' 0 _   es = es
-  mkEvil' n rng es = mkEvil' (n - 1) newRNG es'
-   where
-    (newRNG, _) = split rng
-    es'         = mkEntityOnEmpty [CanMove, HasHealth 3, IsEvil] rng es
+  mkGoal   = mkEntityOnEmpty [IsGoal]
 
-  mkItems = mkItems' (5 :: Integer)
+  mkItems  = mkItems' (5 :: Integer)
   mkItems' 0 _ es = es
   mkItems' n rng es =
     let (compsRNG, newRNG) = split rng
         es' = mkEntityOnEmpty (randomItemComponents compsRNG) rng es
     in  mkItems' (n - 1) newRNG es'
+
+  mkEvil = mkEvil' (5 :: Integer)
+  mkEvil' 0 _   es = es
+  mkEvil' n rng es = mkEvil' (n - 1) newRNG es'
+   where
+    (newRNG, _) = split rng
+    es'         = mkEntityOnEmpty [CanMove, HasHealth 3, IsEvil] rng es
 
   mkWalls rng es = mkWalls' (25 :: Integer) rng es
 
@@ -260,7 +286,7 @@ mkGameState cmd = do
 
 -- types of tiles that the renderer should use
 -- (corresponding representations/images aren't actually provided in Game.hs)
-data Tile = DefaultTile | PlayerTile | WallTile | DoorTile | EvilTile | PotionTile
+data Tile = DefaultTile | PlayerTile | GoalTile | WallTile | DoorTile | EvilTile | PotionTile
 
 data System = System
   { qualifier :: Entity -> Bool
@@ -294,9 +320,12 @@ gridAStar es begin dest = aStar getNeighbors
     (fromList . filter
         (\(x', y') ->
           none (\e -> e ^. posX == x' && e ^. posY == y' && isWall e) es
+            && withinBounds x'
+            && withinBounds y'
         )
       )
       [(x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)]
+  withinBounds = (>= 0) &&$ (< matrixSize)
 
 -- this has to prevent entities from walking on certain things
 attemptMove :: Int -> Int -> Entity -> GameState -> GameState
@@ -322,26 +351,40 @@ fromMoveCommand c e =
       East  -> attemptMove (e ^. posX + 1) (e ^. posY)
       South -> attemptMove (e ^. posX) (e ^. posY + 1)
       West  -> attemptMove (e ^. posX - 1) (e ^. posY)
-      _     -> flip const
+      _     -> \_ x -> x
     )
     e
+
+detectWin :: System
+detectWin = def
+  { qualifier = isPlayer
+  , everyTick = \_ e g ->
+                  if getCoords e
+                     == (getCoords . fromJust . find isGoal) (g ^. entities)
+                  then
+                    over message ("you win!" :) g
+                  else
+                    g
+  }
+  where getCoords e = (e ^. posX, e ^. posY)
 
 moveEvil :: System
 moveEvil = def
   { qualifier = canMove &&$ isEvil
   , everyTick = \_ e g ->
-    (case
-          gridAStar
-            (g ^. entities)
-            (e ^. posX, e ^. posY)
-            ((\e' -> (e' ^. posX, e' ^. posY))
-              (head . filter isPlayer $ g ^. entities)
-            )
-        of
-          Just ((x, y) : _) -> attemptMove x y e
-          _                 -> id
-      )
-      g
+                  (case filter isPlayer $ g ^. entities of
+                      p : _ ->
+                        (case
+                            gridAStar (g ^. entities)
+                                      (e ^. posX, e ^. posY)
+                                      ((\e' -> (e' ^. posX, e' ^. posY)) p)
+                          of
+                            Just ((x, y) : _) -> attemptMove x y e
+                            _                 -> id
+                        )
+                      [] -> id
+                    )
+                    g
   }
 
 drinkPotion :: System
@@ -368,14 +411,8 @@ systems =
         , buildRepr = \_ _ -> PlayerTile
         , buildName = \_ _ -> "the player"
         }
-    -- move player
-  , def { qualifier = isPlayer &&$ canMove, everyTick = fromMoveCommand }
-    -- display player hp
-  , def
-    { qualifier = isPlayer &&$ hasHealth
-    , everyTick = \_ e g ->
-      over message (++ ["you have " <> (show . getHealth) e <> " hp"]) g
-    }
+    -- render goal
+  , def { qualifier = isGoal, buildRepr = \_ _ -> GoalTile }
     -- render wall
   , def { qualifier = isWall, buildRepr = \_ _ -> WallTile }
     -- render door
@@ -385,12 +422,30 @@ systems =
         , buildRepr = \_ _ -> EvilTile
         , buildName = \_ _ -> "a rat"
         }
-    -- move enemy
-  , moveEvil
     -- render potion
   , def { qualifier = isPotion, buildRepr = \_ _ -> PotionTile }
+    -- move player
+  , def { qualifier = isPlayer &&$ canMove, everyTick = fromMoveCommand }
+    -- move enemy
+  , moveEvil
+    -- display player hp
+  , def
+    { qualifier = isPlayer &&$ hasHealth
+    , everyTick = \_ e g ->
+      over message (++ ["you have " <> (show . getHealth) e <> " hp"]) g
+    }
     -- drink potion
   , drinkPotion
+    -- implement death
+  , def
+    { qualifier = hasHealth
+    , everyTick = \_ e -> if getHealth e <= 0
+                    then over message (name e <> " has died!" :)
+                      . over entities (delete e)
+                    else id
+    }
+  , -- implement goal
+    detectWin
   ]
 
 buildFromEntity :: (System -> Entity -> a -> a) -> a -> Entity -> a
@@ -415,7 +470,8 @@ getGrid =
   where setEntity e = mset (e ^. posX) (e ^. posY) (Just e)
 
 executeStep :: GameState -> GameState
-executeStep = (compose . map runSystemET) systems . set message []
+executeStep =
+  over message reverse . (compose . map runSystemET) systems . set message []
 
 step :: (EntityGrid -> a) -> State GameState a
 step render = do
