@@ -1,15 +1,30 @@
-{-# LANGUAGE DataKinds #-}
+{-# LANGUAGE DataKinds         #-}
+{-# LANGUAGE NoImplicitPrelude #-}
 
 module Utils where
 
-import           Control.Lens
+import           Relude
+import           Relude.Unsafe                  ( (!!) )
+
+import           Control.Lens            hiding ( Context )
 import qualified Data.Vector.Fixed             as Vec
 import           Data.Vector.Fixed.Boxed        ( Vec )
+import           Network.Wreq.Session           ( Session )
 import           System.Random
 
 
+data Context = Context
+  { ctxSession   :: Session
+  , ctxAPIToken  :: Text
+  , ctxWSToken   :: Text
+  , ctxChannelID :: Text
+  }
+
+type RogueM = ReaderT Context IO
+
+
 compose :: [a -> a] -> a -> a
-compose = flip $ foldl (&)
+compose = flip $ foldl' (&)
 
 replace :: Eq a => a -> a -> [a] -> [a]
 replace x y = map (\o -> if o == x then y else o)

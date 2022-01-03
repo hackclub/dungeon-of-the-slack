@@ -21,8 +21,8 @@ module Game
   , isWall
   ) where
 
-import           Prelude                        ( head )
-import           Relude                  hiding ( head )
+import           Relude
+import qualified Relude.Unsafe                 as Unsafe
 
 import           Utils
 
@@ -124,7 +124,7 @@ isPotion =
 
 getHealth :: Entity -> Int
 getHealth =
-  head
+  Unsafe.head
     . concatMap
         (\case
           HasHealth h -> [h]

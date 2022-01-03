@@ -8,7 +8,7 @@ module Slack
   , EventHandler
   , SocketEventContent(..)
   , SocketEventResContent(..)
-  , getChannelId
+  , getChannelID
   , sendMessage
   , editMessage
   , reactToMessage
@@ -132,9 +132,9 @@ instance ToJSON SocketEventRes where
         )
 
 
-type EventHandler = SocketEventContent -> IO SocketEventResContent
+type EventHandler m = SocketEventContent -> m SocketEventResContent
 
-wsClient :: EventHandler -> ClientApp ()
+wsClient :: EventHandler IO -> Connection -> IO ()
 wsClient handleMsg conn = do
   putStrLn "Connected!"
   forever $ receiveData conn >>= \msg ->
@@ -152,14 +152,14 @@ wsClient handleMsg conn = do
     res <- handleMsg (content se)
     case res of
       NoRes -> return ()
-      _     -> sendTextData
+      _     -> liftIO $ sendTextData
         conn
         (encode SocketEventRes { outEnvId = id_, resContent = res })
 
 
-wsConnect :: Session -> Text -> EventHandler -> IO ()
+wsConnect :: Session -> Text -> EventHandler IO -> IO ()
 wsConnect session wsToken handle = do
-  getURLRes <- asJSON =<< S.postWith
+  getURLRes <- liftIO $ asJSON =<< S.postWith
     (defaults & header "Authorization" .~ ["Bearer " <> encodeUtf8 wsToken])
     session
     "https://slack.com/api/apps.connections.open"
@@ -202,8 +202,8 @@ instance FromJSON Channel where
     chanId'   <- v .: "id"
     return $ Channel { chanName = chanName', chanId = chanId' }
 
-getChannelId :: Session -> Text -> Text -> IO Text
-getChannelId session token name = do
+getChannelID :: Session -> Text -> Text -> IO Text
+getChannelID session token name = do
   chanListRes <- S.getWith
     (  defaults
     &  header "Authorization"

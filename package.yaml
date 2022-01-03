@@ -25,11 +25,6 @@ dependencies:
   - megaparsec
   - random
   - split
-library:
-  source-dirs: .
-  exposed-modules:
-    - Game
-    - Slack
 executable:
   main: Main.hs
-  source-dirs: .
+  source-dirs: src
