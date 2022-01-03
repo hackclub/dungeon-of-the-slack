@@ -15,8 +15,19 @@ import           Utils
 import           Control.Concurrent             ( forkIO )
 import           Data.List.Split                ( chunksOf )
 import           Data.Maybe                     ( fromJust )
+import           Network.Wreq.Session           ( Session )
 import qualified Network.Wreq.Session          as S
 import           System.Environment             ( lookupEnv )
+
+
+data Context = Context
+  { ctxSession   :: Session
+  , ctxAPIToken  :: Text
+  , ctxWSToken   :: Text
+  , ctxChannelID :: Text
+  }
+
+type RogueM = ReaderT Context IO
 
 
 -- user id hardcoded for convenience. sorry!
@@ -122,6 +133,7 @@ app = do
     -- i think the message handler has to be IO
     -- runSecureClient is monomorphic in its argument
     -- so...whatever
+
 
 main :: IO ()
 main = do

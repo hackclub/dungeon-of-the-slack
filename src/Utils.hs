@@ -13,16 +13,6 @@ import           Network.Wreq.Session           ( Session )
 import           System.Random
 
 
-data Context = Context
-  { ctxSession   :: Session
-  , ctxAPIToken  :: Text
-  , ctxWSToken   :: Text
-  , ctxChannelID :: Text
-  }
-
-type RogueM = ReaderT Context IO
-
-
 compose :: [a -> a] -> a -> a
 compose = flip $ foldl' (&)
 
