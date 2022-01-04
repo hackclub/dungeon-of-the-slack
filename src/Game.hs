@@ -46,11 +46,11 @@ data Component =
   | IsGoal
   | IsEvil
   | IsPlayer
-  deriving (Eq, Ord)
+  deriving (Eq, Ord, Show) -- Show for debug
 
 -- TODO placeholder
 data Effect = Effect
-  deriving (Eq, Ord)
+  deriving (Eq, Ord, Show) -- Show for debug
 
 -- TODO location could be a component!
 --      this would allow for eg inventory items
@@ -59,7 +59,7 @@ data Entity = Entity
   , _posY       :: Int
   , _components :: Set Component
   }
-  deriving Eq
+  deriving (Eq, Show) -- Show for debug
 
 makeLenses ''Entity
 
@@ -124,14 +124,18 @@ isPotion =
     . view components
 
 getHealth :: Entity -> Int
-getHealth =
-  Unsafe.head
+getHealth e =
+  (\case
+      h : _ -> h
+      []    -> error $ "Called getHealth on entity without health: " <> show e
+    )
     . concatMap
         (\case
           HasHealth h -> [h]
           _           -> []
         )
     . view components
+    $ e
 
 setHealth :: Int -> Entity -> Entity
 setHealth n = over
