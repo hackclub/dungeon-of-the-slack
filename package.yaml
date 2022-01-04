@@ -23,7 +23,8 @@ dependencies:
   - fixed-vector
   - lens
   - megaparsec
-  - random
+  - MonadRandom
+  # - random
   - split
 executable:
   main: Main.hs

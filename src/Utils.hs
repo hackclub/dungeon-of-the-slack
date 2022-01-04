@@ -7,10 +7,9 @@ import           Relude
 import           Relude.Unsafe                  ( (!!) )
 
 import           Control.Lens            hiding ( Context )
+import           Control.Monad.Random
 import qualified Data.Vector.Fixed             as Vec
 import           Data.Vector.Fixed.Boxed        ( Vec )
-import           Network.Wreq.Session           ( Session )
-import           System.Random
 
 
 compose :: [a -> a] -> a -> a
@@ -19,15 +18,21 @@ compose = flip $ foldl' (&)
 replace :: Eq a => a -> a -> [a] -> [a]
 replace x y = map (\o -> if o == x then y else o)
 
-randomChoice :: [a] -> StdGen -> a
-randomChoice xs rng = xs !! n where n = fst $ randomR (0, length xs - 1) rng
-
 (&&$), (||$) :: (a -> Bool) -> (a -> Bool) -> a -> Bool
 (&&$) f g x = f x && g x
 (||$) f g x = f x || g x
 
 
--- Matrix
+-- random
+---------
+
+type RandM = Rand StdGen
+
+randomChoice :: [a] -> RandM a
+randomChoice xs = getRandomR (0, length xs - 1) <&> (xs !!)
+
+
+-- matrix
 ---------
 
 matrixSize :: Int

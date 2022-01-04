@@ -13,6 +13,7 @@ import           Slack
 import           Utils
 
 import           Control.Concurrent             ( forkIO )
+import           Control.Monad.Random
 import           Data.List.Split                ( chunksOf )
 import           Data.Maybe                     ( fromJust )
 import           Network.Wreq.Session           ( Session )
@@ -125,7 +126,7 @@ app :: RogueM ()
 app = do
   context                <- ask
   (timestamp, gameState) <-
-    liftIO (mkGameState Noop) >>= stepAndSend Nothing Noop
+    liftIO (evalRandIO $ mkGameState Noop) >>= stepAndSend Nothing Noop
   newIORef gameState
     >>= liftIO
     .   wsConnect (ctxSession context) (ctxWSToken context)
@@ -133,7 +134,6 @@ app = do
     -- i think the message handler has to be IO
     -- runSecureClient is monomorphic in its argument
     -- so...whatever
-
 
 main :: IO ()
 main = do

@@ -4,6 +4,7 @@
 {-# LANGUAGE OverloadedLists   #-}
 {-# LANGUAGE TemplateHaskell   #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 module Game
   ( mkEntityGrid
@@ -27,13 +28,13 @@ import qualified Relude.Unsafe                 as Unsafe
 import           Utils
 
 import           Control.Lens
+import           Control.Monad.Random    hiding ( fromList )
 import           Data.Default
 import           Data.Graph.AStar
 import           Data.List                      ( delete )
 import           Data.Maybe
 import qualified Data.Set                      as Set
 import qualified Data.Vector.Fixed             as Vec
-import           System.Random
 
 
 data Component =
@@ -142,9 +143,11 @@ setHealth n = over
     )
   )
 
-randomItemComponents :: StdGen -> Set Component
-randomItemComponents rng =
-  fromList [randomChoice [IsPotion (randomChoice [Effect] rng)] rng]
+randomItemComponents :: RandM (Set Component)
+randomItemComponents = do
+  effect    <- randomChoice [Effect]
+  component <- randomChoice [IsPotion effect]
+  (return . fromList) [component]
 
 
 type EntityGrid = Matrix (Maybe Entity)
@@ -157,8 +160,7 @@ data Command = Noop | North | East | South | West | Drink deriving (Eq, Ord, Sho
 
 
 data GameState = GameState
-  { gameRNG   :: StdGen
-  , _entities :: [Entity]
+  { _entities :: [Entity]
   , _command  :: Command
   , _message  :: [Text]
   }
@@ -171,24 +173,11 @@ getMessage = view message
 setCommand :: Command -> GameState -> GameState
 setCommand = set command
 
-mkGameState :: Command -> IO GameState
+mkGameState :: Command -> RandM GameState
 mkGameState cmd = do
-  [rng, rngPlayer, rngGoal, rngItems, rngEvil, rngWalls] <- replicateM
-    6
-    newStdGen
-  let gameState = GameState
-        { gameRNG   = rng
-        , _entities = ( mkPlayer rngPlayer
-                      . mkGoal rngGoal
-                      . mkItems rngItems
-                      . mkEvil rngEvil
-                      . mkWalls rngWalls
-                      )
-                        []
-        , _command  = cmd
-        , _message  = []
-        }
-      entities' = gameState ^. entities
+  entities' <- (mkPlayer <=< mkGoal <=< mkItems <=< mkEvil <=< mkWalls) []
+  let gameState =
+        GameState { _entities = entities', _command = cmd, _message = [] }
   case
       gridAStar entities'
                 (findCoords isPlayer entities')
@@ -196,44 +185,48 @@ mkGameState cmd = do
     of
       Just _  -> return gameState
       Nothing -> mkGameState cmd
+
  where
   findCoords f = getCoords . fromJust . find f
   getCoords e = (e ^. posX, e ^. posY)
-  randomCoord       = randomR (0 :: Int, matrixSize - 1)
-  randomCoordNoEdge = randomR (1 :: Int, matrixSize - 2)
+  randomCoord       = getRandomR (0 :: Int, matrixSize - 1)
+  randomCoordNoEdge = getRandomR (1 :: Int, matrixSize - 2)
 
-  mkEntityOnEmpty comps rng es =
+  mkEntityOnEmpty comps es = do
+    coords <- replicateM 2 randomCoord
+    let [x, y] :: [Int] = case coords of
+          x' : y' : _ -> [x', y']
+          _           -> error "???"
+
     if any (\e -> e ^. posX == x && e ^. posY == y) es
-      then mkEntityOnEmpty comps newRNG es
-      else Entity x y comps : es
-   where
-    (x, rng'  ) = randomCoord rng
-    (y, newRNG) = randomCoord rng'
+      then mkEntityOnEmpty comps es
+      else return $ Entity x y comps : es
 
   mkPlayer = mkEntityOnEmpty [CanMove, HasHealth 10, IsPlayer]
 
   mkGoal   = mkEntityOnEmpty [IsGoal]
 
   mkItems  = mkItems' (5 :: Integer)
-  mkItems' 0 _ es = es
-  mkItems' n rng es =
-    let (compsRNG, newRNG) = split rng
-        es' = mkEntityOnEmpty (randomItemComponents compsRNG) rng es
-    in  mkItems' (n - 1) newRNG es'
+  mkItems' 0 es = return es
+  mkItems' n es = do
+    cs <- randomItemComponents
+    mkEntityOnEmpty cs es >>= mkItems' (n - 1)
 
   mkEvil = mkEvil' (5 :: Integer)
-  mkEvil' 0 _   es = es
-  mkEvil' n rng es = mkEvil' (n - 1) newRNG es'
-   where
-    (newRNG, _) = split rng
-    es'         = mkEntityOnEmpty [CanMove, HasHealth 3, IsEvil] rng es
+  mkEvil' 0 es = return es
+  mkEvil' n es =
+    mkEntityOnEmpty [CanMove, HasHealth 3, IsEvil] es >>= mkEvil' (n - 1)
 
-  mkWalls rng es = mkWalls' (25 :: Integer) rng es
-
+  mkWalls es = mkWalls' (25 :: Integer) es
   -- TODO code is ugly; should probably refactor slightly
-  mkWalls' 0 _ es = es
-  mkWalls' n rng es =
+  mkWalls' 0 es = return es
+  mkWalls' n es = do
+    coords <- replicateM 2 randomCoordNoEdge
     let
+      -- no MonadFail instance!
+      [x, y] :: [Int] = case coords of
+        x' : y' : _ -> [x', y']
+        _           -> error "???"
       -- x and y are reversed depending on whether the wall is vertical or
       -- horizontal
       pos1 isX = if isX then posX else posY
@@ -241,8 +234,6 @@ mkGameState cmd = do
       pos2 isX = if isX then posY else posX
       dim2 isX = if isX then y else x
 
-      (x, rng' ) = randomCoordNoEdge rng
-      (y, rng'') = randomCoordNoEdge rng'
       adjEntities isX = filter
         (\e ->
           abs (view (pos1 isX) e - dim1 isX)
@@ -268,20 +259,18 @@ mkGameState cmd = do
         | isX   <- [True, False]
         , isMin <- [True, False]
         ]
-    in
-      case dimRanges of
-        [Just minX, Just maxX, Just minY, Just maxY] ->
-          let
-            newWalls = if even n
+
+    case dimRanges of
+      [Just minX, Just maxX, Just minY, Just maxY] -> do
+        let newWalls = if even n
               then [ Entity x' y [IsWall] | x' <- [minX .. maxX] ]
               else [ Entity x y' [IsWall] | y' <- [minY .. maxY] ]
-            (doorPos, newRNG) = randomR (0, length newWalls - 1) rng''
-            newWallsWithDoor  = newWalls & ix doorPos %~ set components [IsDoor]
-          in
-            if null (adjEntities $ odd n)
-              then mkWalls' (n + 1) newRNG (newWallsWithDoor ++ es)
-              else mkWalls' (n - 1) newRNG es
-        _ -> mkWalls' (n - 1) rng'' es
+        doorPos <- getRandomR (0, length newWalls - 1)
+        let newWallsWithDoor = newWalls & ix doorPos %~ set components [IsDoor]
+        if null (adjEntities $ odd n)
+          then mkWalls' (n + 1) (newWallsWithDoor ++ es)
+          else mkWalls' (n - 1) es
+      _ -> mkWalls' (n - 1) es
 
 
 -- types of tiles that the renderer should use

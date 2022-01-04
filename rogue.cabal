@@ -22,6 +22,7 @@ executable rogue
   ghc-options: -O2 -Wall
   build-depends:
       JuicyPixels
+    , MonadRandom
     , aeson
     , aeson-pretty
     , astar
@@ -35,7 +36,6 @@ executable rogue
     , fixed-vector
     , lens
     , megaparsec
-    , random
     , relude
     , split
     , websockets
