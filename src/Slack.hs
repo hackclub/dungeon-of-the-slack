@@ -2,6 +2,7 @@
 {-# LANGUAGE NoImplicitPrelude   #-}
 {-# LANGUAGE OverloadedStrings   #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE LambdaCase #-}
 
 module Slack
   ( wsConnect
@@ -15,8 +16,7 @@ module Slack
   ) where
 
 import           Prelude                        ( head )
-import           Relude                  hiding ( error
-                                                , get
+import           Relude                  hiding ( get
                                                 , head
                                                 , many
                                                 )
@@ -40,9 +40,9 @@ import           Wuss
 
 
 data GetURLResponse = GetURLResponse
-  { ok    :: Bool
-  , error :: Maybe Text
-  , url   :: Maybe Text
+  { ok     :: Bool
+  , error' :: Maybe Text
+  , url    :: Maybe Text
   }
   deriving Generic
 instance FromJSON GetURLResponse
@@ -178,7 +178,7 @@ wsConnect session wsToken handle = do
         . toString
         . ("Failed to get WebSocket URI with: " <>)
         . fromMaybe "(no error)"
-        . error
+        . error'
         . (^. responseBody)
         $ getURLRes
 
@@ -223,7 +223,12 @@ getChannelID session token name = do
         <> "\n"
         <> decodeUtf8 (chanListRes ^. responseBody)
     Right cl ->
-      return . chanId . head . filter ((== name) . chanName) . channels $ cl
+      return . chanId . head' . filter ((== name) . chanName) . channels $ cl
+     where
+      -- TODO getChannelID should return IO (Maybe Text) and be total
+      head' = \case
+        c : _ -> c
+        []    -> error "Channel with that name not found"
 
 
 newtype SendMsgRes = SendMsgRes
