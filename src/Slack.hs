@@ -15,7 +15,6 @@ module Slack
   , reactToMessage
   ) where
 
-import           Prelude                        ( head )
 import           Relude                  hiding ( get
                                                 , head
                                                 , many
@@ -228,7 +227,7 @@ getChannelID session token name = do
       -- TODO getChannelID should return IO (Maybe Text) and be total
       head' = \case
         c : _ -> c
-        []    -> error "Channel with that name not found"
+        []    -> error $ "Couldn't find channel with name: " <> name
 
 
 newtype SendMsgRes = SendMsgRes
