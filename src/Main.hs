@@ -75,9 +75,11 @@ renderGrid es =
       if vertical' then ":rogue__wall_vert:" else ":rogue__wall_horiz:"
     Just DoorTile ->
       if vertical' then ":rogue__door_vert:" else ":rogue__door_horiz:"
-    Just EvilTile   -> ":rogue__rat:"
-    Just PotionTile -> ":rogue__potion:"
-    Nothing         -> ":rogue__blank:"
+    Just EvilTile      -> ":rogue__rat:"
+    Just PotionTile    -> ":rogue__potion:"
+    Just InPortalTile  -> ":p_orange:" -- TODO placeholder
+    Just OutPortalTile -> ":p_cyan:" -- TODO placeholder
+    Nothing            -> ":rogue__blank:"
 
   isWallOrDoor x' y' = maybe False (\e -> isWall e || isDoor e) $ mget x' y' es
   safeInc a = if a < matrixSize - 1 then a + 1 else a

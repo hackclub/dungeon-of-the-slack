@@ -42,14 +42,16 @@ data Component =
   | IsWall
   | IsDoor
   | IsPotion Effect
+  | IsPortal Portal
   | IsGoal
   | IsEvil
   | IsPlayer
   deriving (Eq, Ord, Show)
 
--- TODO placeholder
 data Effect = NoEffect | RegenerateEffect Int
   deriving (Eq, Ord, Show)
+
+data Portal = In | Out deriving (Eq, Ord, Show)
 
 -- TODO location could be a component!
 --      this would allow for eg inventory items
@@ -63,7 +65,7 @@ data Entity = Entity
 makeLenses ''Entity
 
 -- TODO use th or something?
-canMove, hasHealth, isPlayer, isGoal, isWall, isDoor, isEvil, isPotion
+canMove, hasHealth, isPlayer, isGoal, isWall, isDoor, isEvil, isPotion, isPortal
   :: Entity -> Bool
 canMove =
   any
@@ -121,6 +123,13 @@ isPotion =
         _          -> False
       )
     . view components
+isPortal =
+  any
+      (\case
+        IsPortal _ -> True
+        _          -> False
+      )
+    . view components
 
 getHealth :: Entity -> Int
 getHealth e =
@@ -159,6 +168,20 @@ getEffect e =
     . view components
     $ e
 
+getPortal :: Entity -> Portal
+getPortal e =
+  (\case
+      h : _ -> h
+      []    -> error $ "Called getPortal on non-portal: " <> show e
+    )
+    . concatMap
+        (\case
+          IsPortal p -> [p]
+          _          -> []
+        )
+    . view components
+    $ e
+
 randomItemComponents :: RandM (Set Component)
 randomItemComponents = do
   regenerateAmt <- getRandomR (3, 7)
@@ -192,7 +215,8 @@ setCommand = set command
 
 mkGameState :: Command -> RandM GameState
 mkGameState cmd = do
-  entities' <- (mkPlayer <=< mkGoal <=< mkItems <=< mkEvil <=< mkWalls) []
+  entities' <-
+    (mkPlayer <=< mkGoal <=< mkPortals <=< mkItems <=< mkEvil <=< mkWalls) []
   let gameState =
         GameState { _entities = entities', _command = cmd, _message = [] }
   case
@@ -219,11 +243,13 @@ mkGameState cmd = do
       then mkEntityOnEmpty comps es
       else return $ Entity x y comps : es
 
-  mkPlayer = mkEntityOnEmpty [CanMove, HasHealth 10, IsPlayer]
+  mkPlayer  = mkEntityOnEmpty [CanMove, HasHealth 10, IsPlayer]
 
-  mkGoal   = mkEntityOnEmpty [IsGoal]
+  mkGoal    = mkEntityOnEmpty [IsGoal]
 
-  mkItems  = mkItems' (5 :: Integer)
+  mkPortals = mkEntityOnEmpty [IsPortal In] >=> mkEntityOnEmpty [IsPortal Out]
+
+  mkItems   = mkItems' (5 :: Integer)
   mkItems' 0 es = return es
   mkItems' n es = do
     cs <- randomItemComponents
@@ -292,7 +318,15 @@ mkGameState cmd = do
 
 -- types of tiles that the renderer should use
 -- (corresponding representations/images aren't actually provided in Game.hs)
-data Tile = DefaultTile | PlayerTile | GoalTile | WallTile | DoorTile | EvilTile | PotionTile
+data Tile = DefaultTile
+          | PlayerTile
+          | GoalTile
+          | WallTile
+          | DoorTile
+          | EvilTile
+          | PotionTile
+          | InPortalTile
+          | OutPortalTile
 
 data System = System
   { qualifier :: Entity -> Bool
@@ -393,20 +427,49 @@ moveEvil = def
                     g
   }
 
+applyPortal :: System
+applyPortal = def
+  { qualifier = canMove
+  , everyTick = \_ e g ->
+                  case
+                      ( find
+                        (   isPortal
+                        &&$ ((== In) . getPortal)
+                        &&$ ((== view posX e) . view posX)
+                        &&$ ((== view posY e) . view posY)
+                        )
+                        (g ^. entities)
+                      , find (isPortal &&$ ((== Out) . getPortal))
+                             (g ^. entities)
+                      )
+                    of
+                      (Just _, Just o) -> over
+                        entities
+                        (  replace e
+                        $  e
+                        &  posX
+                        .~ (o ^. posX)
+                        &  posY
+                        .~ (o ^. posY)
+                        )
+                        g
+                      _ -> g
+  }
+
 drinkPotion :: System
 drinkPotion = def
   { qualifier = isPlayer
   , everyTick = \c e g -> if c == Drink
     then
       case
-        filter
+        find
           (\e' ->
             e ^. posX == e' ^. posX && e ^. posY == e' ^. posY && isPotion e'
           )
           (g ^. entities)
       of
-        []    -> g -- drinking nothing doesn't do very much
-        p : _ -> over entities (delete p) . applyEffect p $ g
+        Just p  -> over entities (delete p) . applyEffect p $ g
+        Nothing -> g -- drinking nothing doesn't do very much
     else g
   }
  where
@@ -437,10 +500,20 @@ systems =
         }
     -- render potion
   , def { qualifier = isPotion, buildRepr = \_ _ -> PotionTile }
+    -- render in portal
+  , def { qualifier = isPortal &&$ ((== In) . getPortal)
+        , buildRepr = \_ _ -> InPortalTile
+        }
+    -- render out portal
+  , def { qualifier = isPortal &&$ ((== Out) . getPortal)
+        , buildRepr = \_ _ -> OutPortalTile
+        }
     -- move player
   , def { qualifier = isPlayer &&$ canMove, everyTick = fromMoveCommand }
     -- move enemy
   , moveEvil
+    -- apply portal
+  , applyPortal
     -- display player hp
   , def
     { qualifier = isPlayer &&$ hasHealth
