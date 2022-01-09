@@ -249,7 +249,7 @@ mkGameState cmd = do
 
   mkPortals = mkEntityOnEmpty [IsPortal In] >=> mkEntityOnEmpty [IsPortal Out]
 
-  mkItems   = mkItems' (5 :: Integer)
+  mkItems   = mkItems' (3 :: Integer)
   mkItems' 0 es = return es
   mkItems' n es = do
     cs <- randomItemComponents
