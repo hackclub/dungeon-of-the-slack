@@ -18,6 +18,9 @@ compose = flip $ foldl' (&)
 replace :: Eq a => a -> a -> [a] -> [a]
 replace x y = map (\o -> if o == x then y else o)
 
+replace' :: Eq a => (a -> Bool) -> (a -> a) -> [a] -> [a]
+replace' b f xs = (maybe id (\x -> replace x (f x)) . find b $ xs) xs
+
 (&&$), (||$) :: (a -> Bool) -> (a -> Bool) -> a -> Bool
 (&&$) f g x = f x && g x
 (||$) f g x = f x || g x

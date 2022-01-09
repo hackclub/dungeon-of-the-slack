@@ -23,7 +23,6 @@ module Game
   ) where
 
 import           Relude
-import qualified Relude.Unsafe                 as Unsafe
 
 import           Utils
 
@@ -46,11 +45,11 @@ data Component =
   | IsGoal
   | IsEvil
   | IsPlayer
-  deriving (Eq, Ord, Show) -- Show for debug
+  deriving (Eq, Ord, Show)
 
 -- TODO placeholder
-data Effect = Effect
-  deriving (Eq, Ord, Show) -- Show for debug
+data Effect = NoEffect | RegenerateEffect Int
+  deriving (Eq, Ord, Show)
 
 -- TODO location could be a component!
 --      this would allow for eg inventory items
@@ -59,7 +58,7 @@ data Entity = Entity
   , _posY       :: Int
   , _components :: Set Component
   }
-  deriving (Eq, Show) -- Show for debug
+  deriving (Eq, Show)
 
 makeLenses ''Entity
 
@@ -136,7 +135,6 @@ getHealth e =
         )
     . view components
     $ e
-
 setHealth :: Int -> Entity -> Entity
 setHealth n = over
   components
@@ -147,10 +145,25 @@ setHealth n = over
     )
   )
 
+getEffect :: Entity -> Effect
+getEffect e =
+  (\case
+      h : _ -> h
+      []    -> error $ "Called getHealth on non-potion: " <> show e
+    )
+    . concatMap
+        (\case
+          IsPotion f -> [f]
+          _          -> []
+        )
+    . view components
+    $ e
+
 randomItemComponents :: RandM (Set Component)
 randomItemComponents = do
-  effect    <- randomChoice [Effect]
-  component <- randomChoice [IsPotion effect]
+  regenerateAmt <- getRandomR (3, 7)
+  effect        <- randomChoice [RegenerateEffect regenerateAmt]
+  component     <- randomChoice [IsPotion effect]
   (return . fromList) [component]
 
 
@@ -304,7 +317,7 @@ runSystemET s gs = (foldl' (.) id . map (everyTick s $ gs ^. command))
 -- a* for our entity list
 gridAStar :: [Entity] -> (Int, Int) -> (Int, Int) -> Maybe [(Int, Int)]
 gridAStar es begin dest = aStar getNeighbors
-                                (\_ _ -> 1)
+                                (\_ _ -> 1 :: Integer)
                                 (const 1)
                                 (== dest)
                                 begin
@@ -393,9 +406,16 @@ drinkPotion = def
           (g ^. entities)
       of
         []    -> g -- drinking nothing doesn't do very much
-        p : _ -> over entities (delete p) g -- TODO apply effect
+        p : _ -> over entities (delete p) . applyEffect p $ g
     else g
   }
+ where
+  applyEffect p = over
+    entities
+    (replace' isPlayer $ case getEffect p of
+      RegenerateEffect n -> \e -> setHealth (getHealth e + n) e
+      NoEffect           -> id
+    )
 
 systems :: [System]
 systems =
