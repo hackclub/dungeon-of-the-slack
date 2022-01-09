@@ -374,12 +374,15 @@ attemptMove x y e g =
       e' : _ ->
         over message (name e <> " viciously attacks " <> name e' :)
           . over entities (replace e' (setHealth (getHealth e' - 1) e'))
-      [] -> over
-        entities
-        (\es -> if any (isWall &&$ sameLoc) es
-          then es
-          else replace e (set posY y . set posX x $ e) es
-        )
+      [] -> if x < 0 || x >= matrixSize || y < 0 || y >= matrixSize
+        then over message ("beyond the map lie unspeakable horrors." :)
+          . over entities (replace' (== e) (setHealth 0))
+        else over
+          entities
+          (\es -> if any (isWall &&$ sameLoc) es
+            then es
+            else replace e (set posY y . set posX x $ e) es
+          )
     )
     g
   where sameLoc e' = (e' ^. posX, e' ^. posY) == (x, y)
@@ -443,16 +446,18 @@ applyPortal = def
                              (g ^. entities)
                       )
                     of
-                      (Just _, Just o) -> over
-                        entities
-                        (  replace e
-                        $  e
-                        &  posX
-                        .~ (o ^. posX)
-                        &  posY
-                        .~ (o ^. posY)
-                        )
-                        g
+                      (Just _, Just o) ->
+                        over message (name e <> " has teleported!" :)
+                          . over
+                              entities
+                              (  replace e
+                              $  e
+                              &  posX
+                              .~ (o ^. posX)
+                              &  posY
+                              .~ (o ^. posY)
+                              )
+                          $ g
                       _ -> g
   }
 
