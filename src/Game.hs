@@ -357,15 +357,22 @@ gridAStar es begin dest = aStar getNeighbors
                                 begin
  where
   getNeighbors (x, y) =
-    (fromList . filter
-        (\(x', y') ->
-          none (\e -> e ^. posX == x' && e ^. posY == y' && isWall e) es
-            && withinBounds x'
-            && withinBounds y'
-        )
+    ( fromList
+      . filter
+          (\(x', y') ->
+            none (\e -> e ^. posX == x' && e ^. posY == y' && isWall e) es
+              && withinBounds x'
+              && withinBounds y'
+          )
+      . map givenPortal
       )
       [(x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)]
   withinBounds = (>= 0) &&$ (< matrixSize)
+  givenPortal (x, y) = if maybe False isPortal (toEntity x y)
+    then maybe (x, y) fromEntity $ find (isPortal &&$ ((== Out) . getPortal)) es
+    else (x, y)
+  fromEntity e = (e ^. posX, e ^. posY)
+  toEntity x y = find (((== x) . view posX) &&$ ((== y) . view posY)) es
 
 -- this has to prevent entities from walking on certain things
 attemptMove :: Int -> Int -> Entity -> GameState -> GameState
@@ -376,7 +383,7 @@ attemptMove x y e g =
           . over entities (replace e' (setHealth (getHealth e' - 1) e'))
       [] -> if x < 0 || x >= matrixSize || y < 0 || y >= matrixSize
         then over message ("beyond the map lie unspeakable horrors." :)
-          . over entities (replace' (== e) (setHealth 0))
+          . over entities (replace' (== e) (setHealth (-666)))
         else over
           entities
           (\es -> if any (isWall &&$ sameLoc) es
