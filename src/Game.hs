@@ -41,6 +41,7 @@ data Component =
   | HasHealth Int
   | IsWall
   | IsDoor
+  | IsFire
   | IsPotion Effect
   | IsPortal Portal
   | IsGoal
@@ -65,7 +66,7 @@ data Entity = Entity
 makeLenses ''Entity
 
 -- TODO use th or something?
-canMove, hasHealth, isPlayer, isGoal, isWall, isDoor, isEvil, isPotion, isPortal
+canMove, hasHealth, isPlayer, isGoal, isWall, isDoor, isEvil, isFire, isPotion, isPortal
   :: Entity -> Bool
 canMove =
   any
@@ -113,6 +114,13 @@ isEvil =
   any
       (\case
         IsEvil -> True
+        _      -> False
+      )
+    . view components
+isFire =
+  any
+      (\case
+        IsFire -> True
         _      -> False
       )
     . view components
@@ -186,7 +194,7 @@ randomItemComponents :: RandM (Set Component)
 randomItemComponents = do
   regenerateAmt <- getRandomR (3, 7)
   effect        <- randomChoice [RegenerateEffect regenerateAmt]
-  component     <- randomChoice [IsPotion effect]
+  component     <- randomChoice (IsFire : replicate 3 (IsPotion effect))
   (return . fromList) [component]
 
 
@@ -197,6 +205,13 @@ mkEntityGrid = Matrix . Vec.replicate . Vec.replicate $ Nothing
 
 
 data Command = Noop | North | East | South | West | Drink deriving (Eq, Ord, Show)
+
+
+findCoords :: Foldable t => (Entity -> Bool) -> t Entity -> (Int, Int)
+findCoords f = getCoords . fromJust . find f
+
+getCoords :: Entity -> (Int, Int)
+getCoords e = (e ^. posX, e ^. posY)
 
 
 data GameState = GameState
@@ -224,12 +239,10 @@ mkGameState cmd = do
                 (findCoords isPlayer entities')
                 (findCoords isGoal entities')
     of
-      Just _  -> return gameState
+      Just p  -> if length p >= 14 then return gameState else mkGameState cmd
       Nothing -> mkGameState cmd
 
  where
-  findCoords f = getCoords . fromJust . find f
-  getCoords e = (e ^. posX, e ^. posY)
   randomCoord       = getRandomR (0 :: Int, matrixSize - 1)
   randomCoordNoEdge = getRandomR (1 :: Int, matrixSize - 2)
 
@@ -249,13 +262,13 @@ mkGameState cmd = do
 
   mkPortals = mkEntityOnEmpty [IsPortal In] >=> mkEntityOnEmpty [IsPortal Out]
 
-  mkItems   = mkItems' (3 :: Integer)
+  mkItems   = mkItems' (5 :: Integer)
   mkItems' 0 es = return es
   mkItems' n es = do
     cs <- randomItemComponents
     mkEntityOnEmpty cs es >>= mkItems' (n - 1)
 
-  mkEvil = mkEvil' (5 :: Integer)
+  mkEvil = mkEvil' (8 :: Integer)
   mkEvil' 0 es = return es
   mkEvil' n es =
     mkEntityOnEmpty [CanMove, HasHealth 3, IsEvil] es >>= mkEvil' (n - 1)
@@ -324,6 +337,7 @@ data Tile = DefaultTile
           | WallTile
           | DoorTile
           | EvilTile
+          | FireTile
           | PotionTile
           | InPortalTile
           | OutPortalTile
@@ -416,7 +430,6 @@ detectWin = def
                   else
                     g
   }
-  where getCoords e = (e ^. posX, e ^. posY)
 
 moveEvil :: System
 moveEvil = def
@@ -435,6 +448,15 @@ moveEvil = def
                       [] -> id
                     )
                     g
+  }
+
+detectFire :: System
+detectFire = def
+  { qualifier = isPlayer
+  , everyTick = \_ e g ->
+    if any (isFire &&$ ((== getCoords e) . getCoords)) (g ^. entities)
+      then over entities (replace e (setHealth (getHealth e - 1) e)) g
+      else g
   }
 
 applyPortal :: System
@@ -510,6 +532,8 @@ systems =
         , buildRepr = \_ _ -> EvilTile
         , buildName = \_ _ -> "a rat"
         }
+    -- render fire
+  , def { qualifier = isFire, buildRepr = \_ _ -> FireTile }
     -- render potion
   , def { qualifier = isPotion, buildRepr = \_ _ -> PotionTile }
     -- render in portal
@@ -524,16 +548,18 @@ systems =
   , def { qualifier = isPlayer &&$ canMove, everyTick = fromMoveCommand }
     -- move enemy
   , moveEvil
+    -- detect fire
+  , detectFire
     -- apply portal
   , applyPortal
+    -- drink potion
+  , drinkPotion
     -- display player hp
   , def
     { qualifier = isPlayer &&$ hasHealth
     , everyTick = \_ e g ->
       over message (++ ["you have " <> (show . getHealth) e <> " hp"]) g
     }
-    -- drink potion
-  , drinkPotion
     -- implement death
   , def
     { qualifier = hasHealth

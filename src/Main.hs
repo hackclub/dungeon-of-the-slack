@@ -76,6 +76,7 @@ renderGrid es =
     Just DoorTile ->
       if vertical' then ":rogue__door_vert:" else ":rogue__door_horiz:"
     Just EvilTile      -> ":rogue__rat:"
+    Just FireTile      -> ":rogue__fire:"
     Just PotionTile    -> ":rogue__potion:"
     Just InPortalTile  -> ":rogue__portal_in:"
     Just OutPortalTile -> ":rogue__portal_out:"
