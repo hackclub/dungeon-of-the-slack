@@ -50,10 +50,10 @@ addReacts timestamp = do
 
 fromReact :: Text -> Command
 fromReact = \case
-  "tw_arrow_up"    -> Move (-1, 0)
-  "tw_arrow_right" -> Move (0, 1)
-  "tw_arrow_down"  -> Move (1, 0)
-  "tw_arrow_left"  -> Move (0, -1)
+  "tw_arrow_up"    -> Move (0, -1)
+  "tw_arrow_right" -> Move (1, 0)
+  "tw_arrow_down"  -> Move (0, 1)
+  "tw_arrow_left"  -> Move (-1, 0)
   "tw_tea"         -> Drink
   _                -> Noop
 

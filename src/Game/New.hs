@@ -37,9 +37,11 @@ import           Utils
 
 import           Control.Monad.Random
 import           Data.Default
+import           Data.List                      ( (!!)
+                                                , union
+                                                )
 import qualified Data.Vector.Fixed             as VecF
 import qualified Data.Vector.Unboxed           as Vec
-import           Relude.Unsafe
 
 
 type EntityGrid = Matrix (Maybe Entity)
@@ -127,35 +129,32 @@ type RogueM = SystemT World RandIOM
 -- component polymorphism
 
 type Gettable a = Get World RandIOM a
-data GetBox = forall a . Gettable a => G a
+type Settable a = Set World RandIOM a
+type Memberable a = (Members World RandIOM a, Members World RogueM a)
+data ComponentBox = forall a . (Gettable a, Settable a, Memberable a) => C a
 
-existsBoxed :: Entity -> GetBox -> RogueM Bool
-existsBoxed e (G (_ :: c)) = exists e (Proxy :: Proxy c)
+existsBoxed :: Entity -> ComponentBox -> RogueM Bool
+existsBoxed e (C (_ :: c)) = exists e (Proxy :: Proxy c)
 
 -- TODO proxy might serve this purpose better
 pl :: a
 pl = error "This is a placeholder; it shouldn't have been evaluated!"
 
 
-type Settable a = Set World RandIOM a
-data SetBox = forall a . Settable a => S a
+setBoxed :: Entity -> ComponentBox -> RogueM ()
+setBoxed e (C c) = set e c
 
-setBoxed :: Entity -> SetBox -> RogueM ()
-setBoxed e (S c) = set e c
-
-mkEntity :: [SetBox] -> RogueM Entity
+mkEntity :: [ComponentBox] -> RogueM Entity
 mkEntity = (nextEntity >>=) . mkEntity'
  where
   mkEntity' (s : ss) e = setBoxed e s >> mkEntity' ss e
   mkEntity' []       e = pure e
 
-mkEntity_ :: [SetBox] -> RogueM ()
+mkEntity_ :: [ComponentBox] -> RogueM ()
 mkEntity_ = void . mkEntity
 
 
 -- members
-
-type Memberable a = Members World RandIOM a
 
 members :: Memberable c => Proxy c -> RogueM [Entity]
 members (_ :: Proxy c) = do
@@ -201,22 +200,22 @@ randomCoordNoEdge = do
   y <- lift $ getRandomR (1, maxCoord - 1)
   pure (x, y)
 
-mkEntityOnEmpty_ :: [SetBox] -> RogueM ()
+mkEntityOnEmpty_ :: [ComponentBox] -> RogueM ()
 mkEntityOnEmpty_ ss = do
   (x, y) <- randomCoord
   entityExistsAt x y >>= \occupied -> if occupied
     then mkEntityOnEmpty_ ss
-    else mkEntity_ $ S (HasLocation x y) : ss
+    else mkEntity_ $ C (HasLocation x y) : ss
 
 
 -- comp gen
 -----------
 
-randomItemComponents :: RogueM [SetBox]
+randomItemComponents :: RogueM [ComponentBox]
 randomItemComponents = do
   regenAmount <- lift $ getRandomR (3, 7)
   component   <- lift
-    $ randomChoice (S IsFire : replicate 3 (S $ IsPotion regenAmount))
+    $ randomChoice (C IsFire : replicate 3 (C $ IsPotion regenAmount))
   return [component]
 
 
@@ -247,7 +246,7 @@ mkWalls = mkWalls' 25 where
         constrainWalls isMin isX =
           (\case
               [] -> pure $ if isMin then Just 0 else Just (matrixSize - 1)
-              (e, loc) : _ -> existsBoxed e (G IsDoor) >>= \isDoor ->
+              (e, loc) : _ -> existsBoxed e (C IsDoor) >>= \isDoor ->
                 pure $ if isDoor then Nothing else (Just . pos1 isX) loc
             )
             .   (if isMin then reverse else id)
@@ -270,11 +269,11 @@ mkWalls = mkWalls' 25 where
         [Just minX, Just maxX, Just minY, Just maxY] -> do
           newWalls <- sequence $ if even n
             then
-              [ mkEntity [S (HasLocation x' y), S IsWall]
+              [ mkEntity [C (HasLocation x' y), C IsWall]
               | x' <- [minX .. maxX]
               ]
             else
-              [ mkEntity [S (HasLocation x y'), S IsWall]
+              [ mkEntity [C (HasLocation x y'), C IsWall]
               | y' <- [minY .. maxY]
               ]
           doorPos <- lift $ getRandomR (0, length newWalls - 1)
@@ -286,11 +285,11 @@ mkWalls = mkWalls' 25 where
 populateWorld :: RogueM ()
 populateWorld = do
   mkWalls
-  replicateM_ 5 $ mkEntityOnEmpty_ [S CanMove, S (HasHealth 3), S IsEvil]
+  replicateM_ 5 $ mkEntityOnEmpty_ [C CanMove, C (HasHealth 3), C IsEvil]
   replicateM_ 5 $ randomItemComponents >>= mkEntityOnEmpty_
-  forM_ [S (IsPortal In), S (IsPortal Out)] $ mkEntityOnEmpty_ . (: [])
-  mkEntityOnEmpty_ [S IsGoal]
-  mkEntityOnEmpty_ [S CanMove, S (HasHealth 10), S IsPlayer]
+  forM_ [C (IsPortal In), C (IsPortal Out)] $ mkEntityOnEmpty_ . (: [])
+  mkEntityOnEmpty_ [C IsGoal]
+  mkEntityOnEmpty_ [C CanMove, C (HasHealth 10), C IsPlayer]
 
 
 -- tiles
@@ -312,7 +311,7 @@ data Tile = WallTile
 ----------
 
 data System = System
-  { qualifier :: [GetBox]
+  { qualifier :: [ComponentBox]
   , action    :: Command -> Entity -> RogueM ()
   , transRepr :: Entity -> Tile -> RogueM Tile
   }
@@ -321,25 +320,24 @@ instance Default System where
   def =
     System { qualifier = [], action = \_ _ -> pure (), transRepr = const pure }
 
-qualified :: Entity -> [GetBox] -> RogueM Bool
+qualified :: Entity -> [ComponentBox] -> RogueM Bool
 qualified = allM . existsBoxed
 
 systems :: [System]
 systems =
   [ -- rendering
-    def { qualifier = [G IsWall], transRepr = \_ _ -> pure WallTile }
-  , def { qualifier = [G IsDoor], transRepr = \_ _ -> pure DoorTile }
-  , def { qualifier = [G IsEvil], transRepr = \_ _ -> pure EvilTile }
-  , def { qualifier = [G IsFire], transRepr = \_ _ -> pure FireTile }
-  , def { qualifier = [G (IsPotion pl)], transRepr = \_ _ -> pure PotionTile }
-  , def { qualifier = [G (IsPortal pl)]
+    def { qualifier = [C IsWall], transRepr = \_ _ -> pure WallTile }
+  , def { qualifier = [C IsDoor], transRepr = \_ _ -> pure DoorTile }
+  , def { qualifier = [C IsEvil], transRepr = \_ _ -> pure EvilTile }
+  , def { qualifier = [C (IsPotion pl)], transRepr = \_ _ -> pure PotionTile }
+  , def { qualifier = [C (IsPortal pl)]
         , transRepr = \e _ -> get e <&> PortalTile . portalType
         }
-  , def { qualifier = [G IsGoal], transRepr = \_ _ -> pure GoalTile }
-  , def { qualifier = [G IsPlayer], transRepr = \_ _ -> pure PlayerTile }
+  , def { qualifier = [C IsGoal], transRepr = \_ _ -> pure GoalTile }
+  , def { qualifier = [C IsPlayer], transRepr = \_ _ -> pure PlayerTile }
     -- action
   , def
-    { qualifier = [G (HasLocation pl pl), G CanMove, G IsPlayer]
+    { qualifier = [C (HasLocation pl pl), C CanMove, C IsPlayer]
     , action    = \c e -> case c of
       Move (x, y) ->
         modify e (\(HasLocation x' y') -> HasLocation (x + x') (y + y'))
@@ -369,9 +367,16 @@ getGrid =
     mset (posX entityLoc) (posY entityLoc) (Just entity) grid
 
 executeStep :: Command -> RogueM ()
-executeStep _ = do
+executeStep command = do
   set global $ Message []
-  -- TODO systems
+  forM_
+    systems
+    (\s -> do
+      members' <- mapM (\(C (_ :: c)) -> members (Proxy :: Proxy c))
+                       (qualifier s)
+      mapM_ (\e -> whenM (qualified e $ qualifier s) $ action s command e)
+            (foldl' union [] members')
+    )
   modify global (withMessage reverse)
 
 step
