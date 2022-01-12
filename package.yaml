@@ -8,24 +8,21 @@ dependencies:
   - wreq
   - wuss
 
-  # only useful for image mode
-  - file-embed
-  - JuicyPixels
-
   - aeson
   - aeson-pretty
+  - apecs
   - astar
-  - async
   - base64
   - containers
   - data-default
-  - delay
   - fixed-vector
   - lens
   - megaparsec
   - MonadRandom
-  - random-shuffle
   - split
+  - template-haskell
+  - unliftio
+  - vector
 executable:
   main: Main.hs
   source-dirs: src

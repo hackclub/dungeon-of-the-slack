@@ -8,17 +8,17 @@ module Main
 
 import           Relude
 
-import           Game
+import           Game.New
 import           Slack
 import           Utils
 
-import           Control.Concurrent             ( forkIO )
-import           Control.Monad.Random
+import           Control.Concurrent.Chan
 import           Data.List.Split                ( chunksOf )
 import           Data.Maybe                     ( fromJust )
 import           Network.Wreq.Session           ( Session )
 import qualified Network.Wreq.Session          as S
 import           System.Environment             ( lookupEnv )
+import           UnliftIO.Concurrent            ( forkIO )
 
 
 data Context = Context
@@ -28,14 +28,14 @@ data Context = Context
   , ctxChannelID :: Text
   }
 
-type RogueM = ReaderT Context IO
+type AppM = ReaderT Context RogueM
 
 
 -- user id hardcoded for convenience. sorry!
 rogueUserId :: Text
 rogueUserId = "U02MTTW1XND"
 
-addReacts :: Text -> RogueM ()
+addReacts :: Text -> AppM ()
 addReacts timestamp = do
   Context { ctxSession = session, ctxAPIToken = token, ctxChannelID = channelID } <-
     ask
@@ -50,93 +50,101 @@ addReacts timestamp = do
 
 fromReact :: Text -> Command
 fromReact = \case
-  "tw_arrow_up"    -> North
-  "tw_arrow_right" -> East
-  "tw_arrow_down"  -> South
-  "tw_arrow_left"  -> West
+  "tw_arrow_up"    -> Move (-1, 0)
+  "tw_arrow_right" -> Move (0, 1)
+  "tw_arrow_down"  -> Move (1, 0)
+  "tw_arrow_left"  -> Move (0, -1)
   "tw_tea"         -> Drink
   _                -> Noop
 
-renderGrid :: EntityGrid -> Text
+renderGrid :: EntityGrid -> RogueM Text
 renderGrid es =
-  fromString . concat . intercalate ["\n"] . m2l . fmap fromCoord $ coordMatrix
+  mapM fromCoord coordMatrix <&> fromString . concat . intercalate ["\n"] . m2l
  where
   coordMatrix = (l2m . chunksOf matrixSize)
     [ (x, y) | y <- [0 .. matrixSize - 1], x <- [0 .. matrixSize - 1] ]
 
-  fromCoord (x, y) =
-    (fromEntityRepr (vertical (x, y)) . fmap represent) (mget x y es)
+  fromCoord (x, y) = do
+    vertical' <- vertical (x, y)
+    mapM represent (mget x y es) <&> fromEntityRepr vertical'
 
   fromEntityRepr vertical' = \case
-    Just DefaultTile -> ":rogue__default:"
-    Just PlayerTile  -> ":rogue__player:"
-    Just GoalTile    -> ":rogue__goal:"
     Just WallTile ->
       if vertical' then ":rogue__wall_vert:" else ":rogue__wall_horiz:"
     Just DoorTile ->
       if vertical' then ":rogue__door_vert:" else ":rogue__door_horiz:"
-    Just EvilTile      -> ":rogue__rat:"
-    Just FireTile      -> ":rogue__fire:"
-    Just PotionTile    -> ":rogue__potion:"
-    Just InPortalTile  -> ":rogue__portal_in:"
-    Just OutPortalTile -> ":rogue__portal_out:"
-    Nothing            -> ":rogue__blank:"
+    Just EvilTile         -> ":rogue__rat:"
+    Just FireTile         -> ":rogue__fire:"
+    Just PotionTile       -> ":rogue__potion:"
+    Just (PortalTile In ) -> ":rogue__portal_in:"
+    Just (PortalTile Out) -> ":rogue__portal_out:"
+    Just GoalTile         -> ":rogue__goal:"
+    Just PlayerTile       -> ":rogue__player:"
+    Just ErrorTile        -> ":rogue__default:"
+    Nothing               -> ":rogue__blank:"
 
-  isWallOrDoor x' y' = maybe False (\e -> isWall e || isDoor e) $ mget x' y' es
+  isWallOrDoor' e = represent e <&> ((== WallTile) ||$ (== DoorTile))
+  isWallOrDoor x' y' = maybe (pure False) isWallOrDoor' $ mget x' y' es
   safeInc a = if a < matrixSize - 1 then a + 1 else a
   safeDec a = if a > 0 then a - 1 else a
-  vertical (x, y) =
-    isWallOrDoor x (safeDec y) && isWallOrDoor x (safeInc y) && not
-      (isWallOrDoor (safeDec x) y && isWallOrDoor (safeInc x) y)
+  vertical (x, y) = do
+    l <- sequence
+      [ isWallOrDoor x           (safeDec y)
+      , isWallOrDoor x           (safeInc y)
+      , isWallOrDoor (safeDec x) y
+      , isWallOrDoor (safeInc x) y
+      ]
+    let [a, b, c, d] = l
+    return $ a && b && not (c && d)
 
-stepAndSend :: Maybe Text -> Command -> GameState -> RogueM (Text, GameState)
-stepAndSend edit cmd gameState = do
+stepAndSend :: Maybe Text -> Command -> AppM Text
+stepAndSend edit cmd = do
   Context { ctxSession = session, ctxAPIToken = token, ctxChannelID = channelID } <-
     ask
-  (renderedGrid, newState) <-
-    lift . evalRandIO $ runStateT (step renderGrid) $ setCommand cmd gameState
-  let text = (unlines . getMessage $ newState) <> "\n" <> renderedGrid
+
+  (renderedGrid, message) <- lift
+    $ step cmd renderGrid (pure . unlines . unMessage)
+  let text = message <> "\n" <> renderedGrid
+
   case edit of
     Nothing -> do
       timestamp <-
         liftIO $ sendMessage session token channelID text <&> fromJust
       addReacts timestamp
-      return (timestamp, newState)
+      return timestamp
     Just timestamp -> do
       void . liftIO . forkIO $ editMessage session
                                            token
                                            channelID
                                            timestamp
                                            text
-      return (timestamp, newState)
+      return timestamp
 
-handleMsg :: Text -> IORef GameState -> EventHandler RogueM
-handleMsg timestamp gsRef msg = do
+handleMsg :: Text -> Chan (Maybe Text, Command) -> EventHandler IO
+handleMsg timestamp channel msg = do
   putStrLn $ "Message from socket: " <> show msg
   case msg of
     ReactionAdd e u -> do
-      unless (u == rogueUserId) $ do
-        let cmd = fromReact e
-        (_, newState) <- readIORef gsRef >>= stepAndSend (Just timestamp) cmd
-        writeIORef gsRef newState
+      unless (u == rogueUserId) . void $ writeChan
+        channel
+        (Just timestamp, fromReact e)
       return BasicRes
 
     _ -> do
       putStrLn $ "Can't handle event: " <> show msg
       return NoRes
 
-app :: RogueM ()
+app :: AppM ()
 app = do
-  context                <- ask
-  (timestamp, gameState) <-
-    liftIO (evalRandIO $ mkGameState Noop) >>= stepAndSend Nothing Noop
-  newIORef gameState
-    >>= liftIO
-    .   wsConnect (ctxSession context) (ctxWSToken context)
-    .   (\g e -> runReaderT (handleMsg timestamp g e) context)
-    -- i think the message handler has to be IO
-    -- runSecureClient is monomorphic in its argument
-    -- so...whatever
+  context   <- ask
+  timestamp <- stepAndSend Nothing Noop
+  channel   <- liftIO newChan
+  void . liftIO . forkIO $ wsConnect (ctxSession context)
+                                     (ctxWSToken context)
+                                     (handleMsg timestamp channel)
+  forever $ do
+    (timestamp', command) <- liftIO $ readChan channel
+    stepAndSend timestamp' command
 
 main :: IO ()
 main = do
@@ -152,7 +160,7 @@ main = do
                             , ctxWSToken   = wst
                             , ctxChannelID = channelID
                             }
-      runReaderT app context
+      runRogue $ runReaderT app context
 
     _ ->
       void

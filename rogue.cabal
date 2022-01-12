@@ -14,6 +14,8 @@ executable rogue
   main-is: Main.hs
   other-modules:
       Game
+      Game.New
+      Game.TH
       Slack
       Utils
       Paths_rogue
@@ -21,24 +23,23 @@ executable rogue
       src
   ghc-options: -O2 -Wall
   build-depends:
-      JuicyPixels
-    , MonadRandom
+      MonadRandom
     , aeson
     , aeson-pretty
+    , apecs
     , astar
-    , async
     , base >=4.14 && <5
     , base64
     , containers
     , data-default
-    , delay
-    , file-embed
     , fixed-vector
     , lens
     , megaparsec
-    , random-shuffle
     , relude
     , split
+    , template-haskell
+    , unliftio
+    , vector
     , websockets
     , wreq
     , wuss

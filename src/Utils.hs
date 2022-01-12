@@ -8,6 +8,7 @@ import           Relude.Unsafe                  ( (!!) )
 
 import           Control.Lens            hiding ( Context )
 import           Control.Monad.Random
+import           Data.List.Split                ( chunksOf )
 import qualified Data.Vector.Fixed             as Vec
 import           Data.Vector.Fixed.Boxed        ( Vec )
 
@@ -30,8 +31,9 @@ replace' b f xs = (maybe id (\x -> replace x (f x)) . find b $ xs) xs
 ---------
 
 type RandM = Rand StdGen
+type RandT' m = RandT StdGen m
 
-randomChoice :: [a] -> RandM a
+randomChoice :: Monad m => [a] -> RandT' m a
 randomChoice xs = getRandomR (0, length xs - 1) <&> (xs !!)
 
 
@@ -46,6 +48,12 @@ newtype Matrix a = Matrix { fromMatrix :: Vec 14 (Vec 14 a) }
 
 instance Functor Matrix where
   fmap f = Matrix . (Vec.map . Vec.map) f . fromMatrix
+
+instance Foldable Matrix where
+  foldr f d = foldr f d . concat . m2l
+
+instance Traversable Matrix where
+  traverse m = fmap (l2m . chunksOf matrixSize) . traverse m . concat . m2l
 
 -- maybe this should be some typeclass instance
 m2l :: Matrix a -> [[a]]

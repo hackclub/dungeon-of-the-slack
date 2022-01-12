@@ -11,13 +11,6 @@ packages:
       size: 213
   original:
     hackage: astar-0.3.0.0
-- completed:
-    hackage: delay-0@sha256:7fab2998bbf13bb09a2c0d9719e63417aa61b8a70706f2bc3de4478821485331,1466
-    pantry-tree:
-      sha256: 14b6dfd690427d70a1e70f8695b3a712c19bea7ed60e6624a3df51123920b6bd
-      size: 264
-  original:
-    hackage: delay-0
 snapshots:
 - completed:
     sha256: e66e70a7f998036025e8f40abc89b8eeb79c88f57727020cba1b54f375aa7ca0
