@@ -7,8 +7,11 @@
 {-# LANGUAGE NoImplicitPrelude         #-}
 {-# LANGUAGE OverloadedStrings         #-}
 {-# LANGUAGE ScopedTypeVariables       #-}
+{-# LANGUAGE StandaloneDeriving        #-}
 {-# LANGUAGE TemplateHaskell           #-}
 {-# LANGUAGE TypeFamilies              #-}
+
+-- TODO re-add combat, death, potions, portals, fire
 
 module Game.New
   ( RogueM
@@ -35,8 +38,9 @@ import           Relude                  hiding ( Map
 import           Game.TH
 import           Utils
 
-import           Control.Monad.Random
+import           Control.Monad.Random    hiding ( fromList )
 import           Data.Default
+import           Data.Graph.AStar
 import           Data.List                      ( (!!)
                                                 , union
                                                 )
@@ -75,6 +79,8 @@ defComponent "HasLocation"
   , ("posY", mkType ''Int [])
   ]
   ''Map
+
+deriving instance Eq HasLocation
 
 -- terrain
 
@@ -172,6 +178,12 @@ maxCoord :: Int
 maxCoord = matrixSize - 1
 
 
+-- message
+
+appendMessage :: Text -> RogueM ()
+appendMessage text = modify global $ withMessage (text :)
+
+
 -- commands
 -----------
 
@@ -187,6 +199,10 @@ fromLocation loc = (posX loc, posY loc)
 entityExistsAt :: Int -> Int -> RogueM Bool
 entityExistsAt x y =
   cfold (\found comp -> found || fromLocation comp == (x, y)) False
+
+wallExistsAt :: Int -> Int -> RogueM Bool
+wallExistsAt x y =
+  cfold (\found (comp, IsWall) -> found || fromLocation comp == (x, y)) False
 
 randomCoord :: RogueM (Int, Int)
 randomCoord = do
@@ -292,6 +308,31 @@ populateWorld = do
   mkEntityOnEmpty_ [C CanMove, C (HasHealth 10), C IsPlayer]
 
 
+-- movement
+-----------
+
+getNeighbors :: (Int, Int) -> RogueM (HashSet (Int, Int))
+getNeighbors (x, y) =
+  filterM (fmap not . uncurry wallExistsAt)
+          [(x, y - 1), (x + 1, y), (x, y + 1), (x - 1, y)]
+    <&> fromList
+
+pathfind :: (Int, Int) -> (Int, Int) -> RogueM (Maybe [(Int, Int)])
+pathfind begin dest = aStarM getNeighbors
+                             (\_ _ -> pure (1 :: Int))
+                             (const $ pure 1)
+                             (pure . (== dest))
+                             (pure begin)
+
+moveTo :: Entity -> Int -> Int -> RogueM ()
+moveTo entity destX destY = do
+  HasLocation curX curY <- get entity
+  getNeighbors (curX, curY)
+    >>= flip when (set entity $ HasLocation destX destY)
+    .   ((destX, destY) `elem`)
+    .   toList
+
+
 -- tiles
 --------
 
@@ -323,25 +364,66 @@ instance Default System where
 qualified :: Entity -> [ComponentBox] -> RogueM Bool
 qualified = allM . existsBoxed
 
+
+trivialRender :: ComponentBox -> Tile -> System
+trivialRender comp tile =
+  def { qualifier = [comp], transRepr = \_ _ -> pure tile }
+
+moveEvil :: System
+moveEvil = def
+  { qualifier = [C (HasLocation pl pl), C CanMove, C IsEvil]
+  , action    = \_ e -> do
+                  HasLocation evilX evilY <- get e
+                  playerLoc <- cfold (\_ (loc, IsPlayer) -> Just loc) Nothing
+                  case playerLoc of
+                    Just (HasLocation playerX playerY) -> do
+                      path <- pathfind (evilX, evilY) (playerX, playerY)
+                      maybe (pure ()) (uncurry $ moveTo e)
+                        . (listToMaybe =<<)
+                        $ path
+                    Nothing -> pure ()
+  }
+
 systems :: [System]
 systems =
   [ -- rendering
-    def { qualifier = [C IsWall], transRepr = \_ _ -> pure WallTile }
-  , def { qualifier = [C IsDoor], transRepr = \_ _ -> pure DoorTile }
-  , def { qualifier = [C IsEvil], transRepr = \_ _ -> pure EvilTile }
-  , def { qualifier = [C (IsPotion pl)], transRepr = \_ _ -> pure PotionTile }
+    trivialRender (C IsWall)        WallTile
+  , trivialRender (C IsDoor)        DoorTile
+  , trivialRender (C IsEvil)        EvilTile
+  , trivialRender (C IsFire)        FireTile
+  , trivialRender (C $ IsPotion pl) PotionTile
   , def { qualifier = [C (IsPortal pl)]
         , transRepr = \e _ -> get e <&> PortalTile . portalType
         }
-  , def { qualifier = [C IsGoal], transRepr = \_ _ -> pure GoalTile }
-  , def { qualifier = [C IsPlayer], transRepr = \_ _ -> pure PlayerTile }
+  , trivialRender (C IsGoal)   GoalTile
+  , trivialRender (C IsPlayer) PlayerTile
     -- action
   , def
     { qualifier = [C (HasLocation pl pl), C CanMove, C IsPlayer]
     , action    = \c e -> case c of
-      Move (x, y) ->
-        modify e (\(HasLocation x' y') -> HasLocation (x + x') (y + y'))
-      _ -> pure ()
+                    Move (x, y) -> do
+                      HasLocation x' y' <- get e
+                      moveTo e (x + x') (y + y')
+                    _ -> pure ()
+    }
+  , moveEvil
+    -- message
+  , def
+    { qualifier = [C (HasHealth pl), C IsPlayer]
+    , action    = \_ e ->
+                    get e
+                      >>= appendMessage
+                      .   (\n -> "you have " <> show n <> " hp")
+                      .   unHealth
+    }
+  , def
+    { qualifier = [C (HasLocation pl pl), C IsPlayer]
+    , action    = \_ e -> do
+                    playerLoc <- get e
+                    goalLoc   <- cfold
+                      (\_ (loc :: HasLocation, IsGoal) -> Just loc)
+                      Nothing
+                    when (playerLoc == goalLoc) $ appendMessage "you win!"
     }
   ]
 
