@@ -36,6 +36,7 @@ executable rogue
     , fixed-vector
     , lens
     , megaparsec
+    , random-shuffle
     , relude
     , split
     , websockets

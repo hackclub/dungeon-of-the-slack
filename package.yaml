@@ -24,7 +24,7 @@ dependencies:
   - lens
   - megaparsec
   - MonadRandom
-  # - random
+  - random-shuffle
   - split
 executable:
   main: Main.hs

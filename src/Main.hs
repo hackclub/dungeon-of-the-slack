@@ -93,9 +93,9 @@ stepAndSend :: Maybe Text -> Command -> GameState -> RogueM (Text, GameState)
 stepAndSend edit cmd gameState = do
   Context { ctxSession = session, ctxAPIToken = token, ctxChannelID = channelID } <-
     ask
-  let (renderedGrid, newState) =
-        runState (step renderGrid) $ setCommand cmd gameState
-      text = (unlines . getMessage $ newState) <> "\n" <> renderedGrid
+  (renderedGrid, newState) <-
+    lift . evalRandIO $ runStateT (step renderGrid) $ setCommand cmd gameState
+  let text = (unlines . getMessage $ newState) <> "\n" <> renderedGrid
   case edit of
     Nothing -> do
       timestamp <-
