@@ -1,629 +1,535 @@
-{-# LANGUAGE GADTs             #-}
-{-# LANGUAGE LambdaCase        #-}
-{-# LANGUAGE NoImplicitPrelude #-}
-{-# LANGUAGE OverloadedLists   #-}
-{-# LANGUAGE TemplateHaskell   #-}
-{-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE ConstraintKinds           #-}
+{-# LANGUAGE ExistentialQuantification #-}
+{-# LANGUAGE FlexibleContexts          #-}
+{-# LANGUAGE FlexibleInstances         #-}
+{-# LANGUAGE LambdaCase                #-}
+{-# LANGUAGE MultiParamTypeClasses     #-}
+{-# LANGUAGE NoImplicitPrelude         #-}
+{-# LANGUAGE OverloadedStrings         #-}
+{-# LANGUAGE ScopedTypeVariables       #-}
+{-# LANGUAGE StandaloneDeriving        #-}
+{-# LANGUAGE TemplateHaskell           #-}
+{-# LANGUAGE TypeFamilies              #-}
+
+-- TODO re-add portals, fire
 
 module Game
-  ( mkEntityGrid
-  , mkGameState
-  , step
-  , Entity
+  ( RogueM
   , EntityGrid
   , Command(..)
-  , GameState(..)
+  , Message(..)
   , Tile(..)
-  , getMessage
   , represent
-  , setCommand
-  , isDoor
-  , isWall
+  , populateWorld
+  , step
+  , runRogue
+  , Portal(..)
   ) where
 
-import           Relude
+import           Apecs                   hiding ( System )
+import           Apecs.Core              hiding ( System )
+import           Apecs.Util
+import           Relude                  hiding ( Map
+                                                , Set
+                                                , get
+                                                , modify
+                                                )
 
+import           Game.TH
 import           Utils
 
-import           Control.Lens
 import           Control.Monad.Random    hiding ( fromList )
 import           Data.Default
 import           Data.Graph.AStar
-import           Data.List                      ( delete )
-import           Data.Maybe
-import qualified Data.Set                      as Set
-import qualified Data.Vector.Fixed             as Vec
-import qualified GHC.Exts
+import           Data.List                      ( (!!)
+                                                , union
+                                                )
+import qualified Data.Vector.Fixed             as VecF
+import qualified Data.Vector.Unboxed           as Vec
 
 
-data Component =
-    CanMove
-  | HasHealth Int
-  | IsWall
-  | IsDoor
-  | IsFire
-  | IsPotion Effect
-  | IsPortal Portal
-  | IsGoal
-  | IsEvil
-  | IsPlayer
-  deriving (Eq, Ord, Show)
+-- components
+-------------
 
-data Effect = NoEffect | RegenerateEffect Int
-  deriving (Eq, Ord, Show)
+-- globals
 
-data Portal = In | Out deriving (Eq, Ord, Show)
+defComponent "Message"
+  [("unMessage", mkType ''[] [''Text])]
+  ''Global
 
--- TODO location could be a component!
---      this would allow for eg inventory items
-data Entity = Entity
-  { _posX       :: Int
-  , _posY       :: Int
-  , _components :: Set Component
-  }
-  deriving (Eq, Show)
+instance Semigroup Message where
+  x <> y = Message $ unMessage x <> unMessage y
+instance Monoid Message where
+  mempty = Message []
 
-makeLenses ''Entity
+withMessage :: ([Text] -> [Text]) -> Message -> Message
+withMessage f = Message . f . unMessage
 
--- TODO use th or something?
-canMove, hasHealth, isPlayer, isGoal, isWall, isDoor, isEvil, isFire, isPotion, isPortal
-  :: Entity -> Bool
-canMove =
-  any
-      (\case
-        CanMove -> True
-        _       -> False
-      )
-    . view components
-hasHealth =
-  any
-      (\case
-        HasHealth _ -> True
-        _           -> False
-      )
-    . view components
-isPlayer =
-  any
-      (\case
-        IsPlayer -> True
-        _        -> False
-      )
-    . view components
-isGoal =
-  any
-      (\case
-        IsGoal -> True
-        _      -> False
-      )
-    . view components
-isWall =
-  any
-      (\case
-        IsWall -> True
-        _      -> False
-      )
-    . view components
-isDoor =
-  any
-      (\case
-        IsDoor -> True
-        _      -> False
-      )
-    . view components
-isEvil =
-  any
-      (\case
-        IsEvil -> True
-        _      -> False
-      )
-    . view components
-isFire =
-  any
-      (\case
-        IsFire -> True
-        _      -> False
-      )
-    . view components
-isPotion =
-  any
-      (\case
-        IsPotion _ -> True
-        _          -> False
-      )
-    . view components
-isPortal =
-  any
-      (\case
-        IsPortal _ -> True
-        _          -> False
-      )
-    . view components
+-- abilities
 
-getHealth :: Entity -> Int
-getHealth e =
-  (\case
-      h : _ -> h
-      []    -> error $ "Called getHealth on entity without health: " <> show e
-    )
-    . concatMap
-        (\case
-          HasHealth h -> [h]
-          _           -> []
-        )
-    . view components
-    $ e
-setHealth :: Int -> Entity -> Entity
-setHealth n = over
-  components
-  (Set.map
-    (\case
-      HasHealth _ -> HasHealth n
-      c           -> c
-    )
-  )
+defComponent "CanMove" [] ''Map
+defComponent "HasHealth"
+  [("unHealth", mkType ''Int [])]
+  ''Map
+defComponent "HasLocation"
+  [ ("posX", mkType ''Int [])
+  , ("posY", mkType ''Int [])
+  ]
+  ''Map
 
-getEffect :: Entity -> Effect
-getEffect e =
-  (\case
-      h : _ -> h
-      []    -> error $ "Called getHealth on non-potion: " <> show e
-    )
-    . concatMap
-        (\case
-          IsPotion f -> [f]
-          _          -> []
-        )
-    . view components
-    $ e
+withHealth :: (Int -> Int) -> HasHealth -> HasHealth
+withHealth f = HasHealth . f . unHealth
 
-getPortal :: Entity -> Portal
-getPortal e =
-  (\case
-      h : _ -> h
-      []    -> error $ "Called getPortal on non-portal: " <> show e
-    )
-    . concatMap
-        (\case
-          IsPortal p -> [p]
-          _          -> []
-        )
-    . view components
-    $ e
+deriving instance Eq HasLocation
 
-randomItemComponents :: RandM (Set Component)
-randomItemComponents = do
-  regenerateAmt <- getRandomR (3, 7)
-  effect        <- randomChoice [RegenerateEffect regenerateAmt]
-  component     <- randomChoice (IsFire : replicate 3 (IsPotion effect))
-  (return . fromList) [component]
+-- terrain
 
+defComponent "IsDoor" [] ''Map
+defComponent "IsWall" [] ''Map
+
+-- objects
+
+data Portal = In | Out deriving Eq
+defComponent "IsFire" [] ''Map
+defComponent "IsPortal"
+  [("portalType", mkType ''Portal [])]
+  ''Map
+defComponent "IsPotion"
+  [("unPotion", mkType ''Int [])]
+  ''Map
+
+-- goal
+
+defComponent "IsGoal" [] ''Map
+
+-- alive
+
+defComponent "IsEvil" [] ''Map
+defComponent "IsPlayer" [] ''Unique
+
+
+-- world
+--------
+
+makeWorld "World" [ ''Message
+                  , ''CanMove
+                  , ''HasHealth
+                  , ''HasLocation
+                  , ''IsDoor
+                  , ''IsWall
+                  , ''IsFire
+                  , ''IsPortal
+                  , ''IsPotion
+                  , ''IsGoal
+                  , ''IsEvil
+                  , ''IsPlayer]
+
+-- TODO rename the other RogueM, whose name is less fitting
+type RandIOM = RandT StdGen IO
+type RogueM = SystemT World RandIOM
+
+
+-- utilities
+------------
+
+-- component polymorphism
+
+type Gettable a = (Get World RandIOM a, Get World RogueM a)
+type Settable a = Set World RandIOM a
+type Memberable a = (Members World RandIOM a, Members World RogueM a)
+data ComponentBox = forall a . (Gettable a, Settable a, Memberable a) => C a
+
+existsBoxed :: Entity -> ComponentBox -> RogueM Bool
+existsBoxed e (C (_ :: c)) = exists e (Proxy :: Proxy c)
+
+-- TODO proxy might serve this purpose better
+pl :: a
+pl = error "This is a placeholder; it shouldn't have been evaluated!"
+
+
+setBoxed :: Entity -> ComponentBox -> RogueM ()
+setBoxed e (C c) = set e c
+
+mkEntity :: [ComponentBox] -> RogueM Entity
+mkEntity = (nextEntity >>=) . mkEntity'
+ where
+  mkEntity' (s : ss) e = setBoxed e s >> mkEntity' ss e
+  mkEntity' []       e = pure e
+
+mkEntity_ :: [ComponentBox] -> RogueM ()
+mkEntity_ = void . mkEntity
+
+
+-- members
+
+members :: Memberable c => Proxy c -> RogueM [Entity]
+members (_ :: Proxy c) = do
+  storage :: Storage c <- getStore
+  memberVec            <- lift $ explMembers storage
+  (pure . map Entity . Vec.toList) memberVec
+
+
+-- map
 
 type EntityGrid = Matrix (Maybe Entity)
 
-mkEntityGrid :: EntityGrid
-mkEntityGrid = Matrix . Vec.replicate . Vec.replicate $ Nothing
+emptyMap :: EntityGrid
+emptyMap = (Matrix . VecF.replicate . VecF.replicate) Nothing
+
+maxCoord :: Int
+maxCoord = matrixSize - 1
 
 
-data Command = Noop | North | East | South | West | Drink deriving (Eq, Ord, Show)
+-- message
+
+appendMessage :: Text -> RogueM ()
+appendMessage text = modify global $ withMessage (text :)
 
 
-findCoords :: Foldable t => (Entity -> Bool) -> t Entity -> (Int, Int)
-findCoords f = getCoords . fromJust . find f
+-- location
 
-getCoords :: Entity -> (Int, Int)
-getCoords e = (e ^. posX, e ^. posY)
+fromLocation :: HasLocation -> (Int, Int)
+fromLocation loc = (posX loc, posY loc)
 
+entityExistsAt :: Int -> Int -> RogueM Bool
+entityExistsAt x y =
+  cfold (\found comp -> found || fromLocation comp == (x, y)) False
 
-data GameState = GameState
-  { _entities :: [Entity]
-  , _command  :: Command
-  , _message  :: [Text]
-  }
-
-makeLenses ''GameState
-
-getMessage :: GameState -> [Text]
-getMessage = view message
-
-setCommand :: Command -> GameState -> GameState
-setCommand = set command
-
-mkGameState :: Command -> RandM GameState
-mkGameState cmd = do
-  entities' <-
-    (mkPlayer <=< mkGoal <=< mkPortals <=< mkItems <=< mkEvil <=< mkWalls) []
-  let gameState =
-        GameState { _entities = entities', _command = cmd, _message = [] }
-  case
-      gridAStar entities'
-                (findCoords isPlayer entities')
-                (findCoords isGoal entities')
-    of
-      Just p  -> if length p >= 14 then return gameState else mkGameState cmd
-      Nothing -> mkGameState cmd
-
- where
-  randomCoord       = getRandomR (0 :: Int, matrixSize - 1)
-  randomCoordNoEdge = getRandomR (1 :: Int, matrixSize - 2)
-
-  mkEntityOnEmpty comps es = do
-    coords <- replicateM 2 randomCoord
-    let [x, y] :: [Int] = case coords of
-          x' : y' : _ -> [x', y']
-          _           -> error "???"
-
-    if any (\e -> e ^. posX == x && e ^. posY == y) es
-      then mkEntityOnEmpty comps es
-      else return $ Entity x y comps : es
-
-  mkPlayer  = mkEntityOnEmpty [CanMove, HasHealth 10, IsPlayer]
-
-  mkGoal    = mkEntityOnEmpty [IsGoal]
-
-  mkPortals = mkEntityOnEmpty [IsPortal In] >=> mkEntityOnEmpty [IsPortal Out]
-
-  mkItems   = mkItems' (5 :: Integer)
-  mkItems' 0 es = return es
-  mkItems' n es = do
-    cs <- randomItemComponents
-    mkEntityOnEmpty cs es >>= mkItems' (n - 1)
-
-  mkEvil = mkEvil' (8 :: Integer)
-  mkEvil' 0 es = return es
-  mkEvil' n es =
-    mkEntityOnEmpty [CanMove, HasHealth 3, IsEvil] es >>= mkEvil' (n - 1)
-
-  mkWalls es = mkWalls' (25 :: Integer) es
-  -- TODO code is ugly; should probably refactor slightly
-  mkWalls' 0 es = return es
-  mkWalls' n es = do
-    coords <- replicateM 2 randomCoordNoEdge
-    let
-      -- no MonadFail instance!
-      [x, y] :: [Int] = case coords of
-        x' : y' : _ -> [x', y']
-        _           -> error "???"
-      -- x and y are reversed depending on whether the wall is vertical or
-      -- horizontal
-      pos1 isX = if isX then posX else posY
-      dim1 isX = if isX then x else y
-      pos2 isX = if isX then posY else posX
-      dim2 isX = if isX then y else x
-
-      adjEntities isX = filter
-        (\e ->
-          abs (view (pos1 isX) e - dim1 isX)
-            <  3
-            && view (pos2 isX) e
-            -  dim2 isX
-            == 0
-        )
-        es
-      constrainWalls isMin isX =
-        (\case
-            []    -> if isMin then Just 0 else Just (matrixSize - 1)
-            e : _ -> if Set.member IsDoor (e ^. components)
-              then Nothing
-              else Just $ e ^. pos1 isX
+findEntityAt :: Gettable c => Int -> Int -> Proxy c -> RogueM (Maybe Entity)
+findEntityAt x y (_ :: Proxy c) =
+  members (Proxy :: Proxy (HasLocation, c))
+    >>= mapM get
+    <&> listToMaybe
+    .   mapMaybe
+          (\(entity, HasLocation x' y') ->
+            if x == x' && y == y' then Just entity else Nothing
           )
-          . (if isMin then reverse else id)
-          . sortOn (view $ pos1 isX)
-          . filter ((if isMin then (>=) else (<=)) (dim1 isX) . view (pos1 isX))
-          . filter ((== dim2 isX) . view (pos2 isX))
-      dimRanges =
-        [ constrainWalls isMin isX es
-        | isX   <- [True, False]
-        , isMin <- [True, False]
-        ]
 
-    case dimRanges of
-      [Just minX, Just maxX, Just minY, Just maxY] -> do
-        let newWalls = if even n
-              then [ Entity x' y [IsWall] | x' <- [minX .. maxX] ]
-              else [ Entity x y' [IsWall] | y' <- [minY .. maxY] ]
-        doorPos <- getRandomR (0, length newWalls - 1)
-        let newWallsWithDoor = newWalls & ix doorPos %~ set components [IsDoor]
-        if null (adjEntities $ odd n)
-          then mkWalls' (n + 1) (newWallsWithDoor ++ es)
-          else mkWalls' (n - 1) es
-      _ -> mkWalls' (n - 1) es
+wallExistsAt :: Int -> Int -> RogueM Bool
+wallExistsAt x y =
+  cfold (\found (comp, IsWall) -> found || fromLocation comp == (x, y)) False
+
+randomCoord :: RogueM (Int, Int)
+randomCoord = do
+  x <- lift $ getRandomR (0, maxCoord)
+  y <- lift $ getRandomR (0, maxCoord)
+  pure (x, y)
+
+randomCoordNoEdge :: RogueM (Int, Int)
+randomCoordNoEdge = do
+  x <- lift $ getRandomR (1, maxCoord - 1)
+  y <- lift $ getRandomR (1, maxCoord - 1)
+  pure (x, y)
+
+mkEntityOnEmpty_ :: [ComponentBox] -> RogueM ()
+mkEntityOnEmpty_ ss = do
+  (x, y) <- randomCoord
+  entityExistsAt x y >>= \occupied -> if occupied
+    then mkEntityOnEmpty_ ss
+    else mkEntity_ $ C (HasLocation x y) : ss
 
 
--- types of tiles that the renderer should use
--- (corresponding representations/images aren't actually provided in Game.hs)
-data Tile = DefaultTile
-          | PlayerTile
-          | GoalTile
-          | WallTile
+-- comp gen
+-----------
+
+randomItemComponents :: RogueM [ComponentBox]
+randomItemComponents = do
+  regenAmount <- lift $ getRandomR (3, 7)
+  component   <- lift
+    $ randomChoice (C IsFire : replicate 3 (C $ IsPotion regenAmount))
+  return [component]
+
+
+-- commands
+-----------
+
+data Command = Noop | Move (Int, Int) | Drink
+
+
+-- initialization
+-----------------
+
+mkWalls :: RogueM ()
+mkWalls = mkWalls' 25 where
+  mkWalls' :: Int -> RogueM ()
+  mkWalls' 0 = return ()
+  mkWalls' n = do
+    (x, y) <- randomCoordNoEdge
+
+    let pos1 = if even n then posX else posY
+        dim1 = if even n then x else y
+        pos2 = if even n then posY else posX
+        dim2 = if even n then y else x
+
+        adjEntityLocs :: RogueM [HasLocation]
+        adjEntityLocs = cfold
+          (\ls loc -> if abs (pos2 loc - dim2) < 3 && pos1 loc - dim1 == 0
+            then loc : ls
+            else ls
+          )
+          []
+
+        constrainWalls isMin =
+          (\case
+              [] -> pure $ if isMin then Just 0 else Just (matrixSize - 1)
+              (e, loc) : _ -> existsBoxed e (C IsDoor) >>= \isDoor ->
+                pure $ if isDoor then Nothing else (Just . pos1) loc
+            )
+            .   (if isMin then reverse else id)
+            .   sortOn (pos1 . snd)
+            .   filter ((if isMin then (>=) else (<=)) dim1 . pos1 . snd)
+            .   filter ((== dim2) . pos2 . snd)
+            <=< mapM get
+
+    entities  <- members (Proxy :: Proxy HasLocation)
+    dimRanges <- sequence
+      [ constrainWalls isMin entities | isMin <- [True, False] ]
+
+    valid <- null <$> adjEntityLocs
+    if valid
+      then case dimRanges of
+        [Just min', Just max'] -> do
+          newWalls <- sequence $ if even n
+            then
+              [ mkEntity [C (HasLocation x' y), C IsWall]
+              | x' <- [min' .. max']
+              ]
+            else
+              [ mkEntity [C (HasLocation x y'), C IsWall]
+              | y' <- [min' .. max']
+              ]
+          doorPos <- lift $ getRandomR (0, length newWalls - 1)
+          set (newWalls !! doorPos) (Not :: Not IsWall, IsDoor)
+          mkWalls' (n + 1)
+        _ -> mkWalls' (n - 1)
+      else mkWalls' (n - 1)
+
+populateWorld :: RogueM ()
+populateWorld = do
+  mkWalls
+  replicateM_ 5 $ mkEntityOnEmpty_ [C CanMove, C (HasHealth 3), C IsEvil]
+  replicateM_ 3 $ randomItemComponents >>= mkEntityOnEmpty_
+  forM_ [C (IsPortal In), C (IsPortal Out)] $ mkEntityOnEmpty_ . (: [])
+  mkEntityOnEmpty_ [C IsGoal]
+  mkEntityOnEmpty_ [C CanMove, C (HasHealth 10), C IsPlayer]
+
+
+-- movement
+-----------
+
+getNeighbors :: (Int, Int) -> RogueM (HashSet (Int, Int))
+getNeighbors (x, y) =
+  filterM (fmap not . uncurry wallExistsAt)
+          [(x, y - 1), (x + 1, y), (x, y + 1), (x - 1, y)]
+    <&> fromList
+
+pathfind :: (Int, Int) -> (Int, Int) -> RogueM (Maybe [(Int, Int)])
+pathfind begin dest = aStarM getNeighbors
+                             (\_ _ -> pure (1 :: Int))
+                             (const $ pure 1)
+                             (pure . (== dest))
+                             (pure begin)
+
+-- also handles combat
+moveTo :: Entity -> Int -> Int -> RogueM ()
+moveTo entity destX destY = do
+  HasLocation curX curY <- get entity
+  getNeighbors (curX, curY)
+    >>= flip when attackOrMove
+    .   ((destX, destY) `elem`)
+    .   toList
+ where
+  attackOrMove = findEntityAt destX destY (Proxy :: Proxy HasHealth)
+    >>= maybe
+          (set entity $ HasLocation destX destY)
+          (flip modify $ withHealth pred)
+
+
+-- tiles
+--------
+
+data Tile = WallTile
           | DoorTile
           | EvilTile
           | FireTile
           | PotionTile
-          | InPortalTile
-          | OutPortalTile
+          | PortalTile Portal
+          | GoalTile
+          | PlayerTile
+          | ErrorTile
+          deriving Eq
+
+
+-- systems
+----------
 
 data System = System
-  { qualifier :: Entity -> Bool
-  , everyTick :: Command -> Entity -> GameState -> RandM GameState
-  , buildRepr :: Entity -> Tile -> Tile
-  , buildName :: Entity -> Text -> Text
+  { qualifier :: [ComponentBox]
+  , action    :: Command -> Entity -> RogueM ()
+  , transRepr :: Entity -> Tile -> RogueM Tile
+  , transName :: Entity -> Text -> RogueM Text
   }
 
 instance Default System where
-  def = System { qualifier = const False
-               , everyTick = \_ _ -> pure
-               , buildRepr = const id
-               , buildName = const id
+  def = System { qualifier = []
+               , action    = \_ _ -> pure ()
+               , transRepr = const pure
+               , transName = const pure
                }
 
--- runs a system's everyTick over all entities
-runSystemET :: System -> GameState -> RandM GameState
-runSystemET s gs = (foldl' (<=<) pure . map (everyTick s $ gs ^. command))
-  (filter (qualifier s) (gs ^. entities))
-  gs
+qualified :: Entity -> [ComponentBox] -> RogueM Bool
+qualified = allM . existsBoxed
 
--- evil autogenerated type sig
-getNeighbors
-  :: (Foldable f, IsList c, GHC.Exts.Item c ~ (Int, Int))
-  => f Entity
-  -> (Int, Int)
-  -> c
-getNeighbors es (x, y) =
-  ( fromList
-    . filter
-        (\(x', y') ->
-          none (\e -> e ^. posX == x' && e ^. posY == y' && isWall e) es
-            && withinBounds x'
-            && withinBounds y'
-        )
-    . map givenPortal
-    )
-    [(x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)]
- where
-  withinBounds = (>= 0) &&$ (< matrixSize)
-  givenPortal (x', y') = if maybe False isPortal (toEntity x' y')
-    then maybe (x', y') fromEntity
-      $ find (isPortal &&$ ((== Out) . getPortal)) es
-    else (x', y')
-  fromEntity e = (e ^. posX, e ^. posY)
-  toEntity x' y' = find (((== x') . view posX) &&$ ((== y') . view posY)) es
 
--- a* for our entity list
-gridAStar :: [Entity] -> (Int, Int) -> (Int, Int) -> Maybe [(Int, Int)]
-gridAStar es begin dest =
-  aStar (getNeighbors es) (\_ _ -> 1 :: Integer) (const 1) (== dest) begin
-
--- this has to prevent entities from walking on certain things
-attemptMove :: Int -> Int -> Entity -> GameState -> GameState
-attemptMove x y e g =
-  (case filter (hasHealth &&$ sameLoc) (g ^. entities) of
-      e' : _ ->
-        over message (name e <> " viciously attacks " <> name e' :)
-          . over entities (replace e' (setHealth (getHealth e' - 1) e'))
-      [] -> if x < 0 || x >= matrixSize || y < 0 || y >= matrixSize
-        then over message ("beyond the map lie unspeakable horrors." :)
-          . over entities (replace' (== e) (setHealth (-666)))
-        else over
-          entities
-          (\es -> if any (isWall &&$ sameLoc) es
-            then es
-            else replace e (set posY y . set posX x $ e) es
-          )
-    )
-    g
-  where sameLoc e' = (e' ^. posX, e' ^. posY) == (x, y)
-
-fromMoveCommand :: Command -> Entity -> GameState -> GameState
-fromMoveCommand c e =
-  (case c of
-      North -> attemptMove (e ^. posX) (e ^. posY - 1)
-      East  -> attemptMove (e ^. posX + 1) (e ^. posY)
-      South -> attemptMove (e ^. posX) (e ^. posY + 1)
-      West  -> attemptMove (e ^. posX - 1) (e ^. posY)
-      _     -> \_ x -> x
-    )
-    e
-
-spreadFire :: System
-spreadFire = def
-  { qualifier = isFire
-  , everyTick = \_ e g -> do
-    neighbor <- randomChoice $ getNeighbors (g ^. entities) (getCoords e)
-    let entity = Entity { _posX       = fst neighbor
-                        , _posY       = snd neighbor
-                        , _components = [IsFire]
-                        }
-    getRandom
-      <&> \r -> if r > (0.2 :: Double) then g else over entities (entity :) g
-  }
-
-detectWin :: System
-detectWin = def
-  { qualifier = isPlayer
-  , everyTick = \_ e g ->
-    pure
-      $ if getCoords e == (getCoords . fromJust . find isGoal) (g ^. entities)
-          then over message ("you win!" :) g
-          else g
-  }
+trivialRender :: ComponentBox -> Tile -> Text -> System
+trivialRender comp tile name' = def { qualifier = [comp]
+                                    , transRepr = \_ _ -> pure tile
+                                    , transName = \_ _ -> pure name'
+                                    }
 
 moveEvil :: System
 moveEvil = def
-  { qualifier = canMove &&$ isEvil
-  , everyTick = \_ e g ->
-                  pure
-                    $ (case filter isPlayer $ g ^. entities of
-                        p : _ ->
-                          (case
-                              gridAStar (g ^. entities)
-                                        (e ^. posX, e ^. posY)
-                                        ((\e' -> (e' ^. posX, e' ^. posY)) p)
-                            of
-                              Just ((x, y) : _) -> attemptMove x y e
-                              _                 -> id
-                          )
-                        [] -> id
-                      )
-                        g
+  { qualifier = [C (HasLocation pl pl), C CanMove, C IsEvil]
+  , action    = \_ e -> do
+                  HasLocation evilX evilY <- get e
+                  playerLoc <- cfold (\_ (loc, IsPlayer) -> Just loc) Nothing
+                  case playerLoc of
+                    Just (HasLocation playerX playerY) -> do
+                      path <- pathfind (evilX, evilY) (playerX, playerY)
+                      maybe (pure ()) (uncurry $ moveTo e)
+                        . (listToMaybe =<<)
+                        $ path
+                    Nothing -> pure ()
   }
 
-detectFire :: System
-detectFire = def
-  { qualifier = isPlayer
-  , everyTick = \_ e g ->
-    pure $ if any (isFire &&$ ((== getCoords e) . getCoords)) (g ^. entities)
-      then over entities (replace e (setHealth (getHealth e - 1) e)) g
-      else g
-  }
-
-applyPortal :: System
-applyPortal = def
-  { qualifier = canMove
-  , everyTick = \_ e g ->
-                  pure
-                    $ case
-                        ( find
-                          (   isPortal
-                          &&$ ((== In) . getPortal)
-                          &&$ ((== view posX e) . view posX)
-                          &&$ ((== view posY e) . view posY)
-                          )
-                          (g ^. entities)
-                        , find (isPortal &&$ ((== Out) . getPortal))
-                               (g ^. entities)
-                        )
-                      of
-                        (Just _, Just o) ->
-                          over message (name e <> " has teleported!" :)
-                            . over
-                                entities
-                                (  replace e
-                                $  e
-                                &  posX
-                                .~ (o ^. posX)
-                                &  posY
-                                .~ (o ^. posY)
-                                )
-                            $ g
-                        _ -> g
-  }
-
+-- TODO perhaps generalize?
 drinkPotion :: System
 drinkPotion = def
-  { qualifier = isPlayer
-  , everyTick = \c e g -> pure $ if c == Drink
-    then
-      case
-        find
-          (\e' ->
-            e ^. posX == e' ^. posX && e ^. posY == e' ^. posY && isPotion e'
-          )
-          (g ^. entities)
-      of
-        Just p  -> over entities (delete p) . applyEffect p $ g
-        Nothing -> g -- drinking nothing doesn't do very much
-    else g
+  { qualifier = [C IsPlayer]
+  , action    = \c e -> case c of
+                  Drink -> get e >>= \(HasLocation x y) ->
+                    findEntityAt x y (Proxy :: Proxy IsPotion) >>= maybe
+                      (pure ())
+                      (\e' -> do
+                        get e' >>= modify e . withHealth . (+) . unPotion
+                        destroy e' (Proxy :: Proxy HasLocation)
+                        appendMessage "you feel rejuvenated..."
+                      )
+                  _ -> pure ()
   }
- where
-  applyEffect p = over
-    entities
-    (replace' isPlayer $ case getEffect p of
-      RegenerateEffect n -> \e -> setHealth (getHealth e + n) e
-      NoEffect           -> id
-    )
 
 systems :: [System]
 systems =
-  [ -- render and name player
-    def { qualifier = isPlayer
-        , buildRepr = \_ _ -> PlayerTile
-        , buildName = \_ _ -> "the player"
+  [ -- rendering and naming
+    trivialRender (C IsWall)        WallTile   "a wall"
+  , trivialRender (C IsDoor)        DoorTile   "a door"
+  , trivialRender (C IsEvil)        EvilTile   "a rat"
+  , trivialRender (C IsFire)        FireTile   "fire"
+  , trivialRender (C $ IsPotion pl) PotionTile "a potion"
+  , def { qualifier = [C (IsPortal pl)]
+        , transRepr = \e _ -> get e <&> PortalTile . portalType
+        , transName = \_ _ -> pure "a portal"
         }
-    -- render goal
-  , def { qualifier = isGoal, buildRepr = \_ _ -> GoalTile }
-    -- render wall
-  , def { qualifier = isWall, buildRepr = \_ _ -> WallTile }
-    -- render door
-  , def { qualifier = isDoor, buildRepr = \_ _ -> DoorTile }
-    -- render and name enemy
-  , def { qualifier = isEvil
-        , buildRepr = \_ _ -> EvilTile
-        , buildName = \_ _ -> "a rat"
-        }
-    -- render fire
-  , def { qualifier = isFire, buildRepr = \_ _ -> FireTile }
-    -- render potion
-  , def { qualifier = isPotion, buildRepr = \_ _ -> PotionTile }
-    -- render in portal
-  , def { qualifier = isPortal &&$ ((== In) . getPortal)
-        , buildRepr = \_ _ -> InPortalTile
-        }
-    -- render out portal
-  , def { qualifier = isPortal &&$ ((== Out) . getPortal)
-        , buildRepr = \_ _ -> OutPortalTile
-        }
-    -- spread fire
-  , spreadFire
-    -- move player
-  , def { qualifier = isPlayer &&$ canMove
-        , everyTick = \c e g -> pure $ fromMoveCommand c e g
-        }
-    -- move enemy
+  , trivialRender (C IsGoal)   GoalTile   "the goal"
+  , trivialRender (C IsPlayer) PlayerTile "the player"
+    -- active
+  , def
+    { qualifier = [C (HasLocation pl pl), C CanMove, C IsPlayer]
+    , action    = \c e -> case c of
+                    Move (x, y) -> do
+                      HasLocation x' y' <- get e
+                      moveTo e (x + x') (y + y')
+                    _ -> pure ()
+    }
   , moveEvil
-    -- detect fire
-  , detectFire
-    -- apply portal
-  , applyPortal
-    -- drink potion
   , drinkPotion
-    -- display player hp
+    -- passive
   , def
-    { qualifier = isPlayer &&$ hasHealth
-    , everyTick = \_ e g -> pure $ over
-                    message
-                    (++ ["you have " <> (show . getHealth) e <> " hp"])
-                    g
+    { qualifier = [C (HasHealth pl)]
+    , action    = \_ e -> get e >>= \(HasHealth x) ->
+                    when (x <= 0)
+                    -- no way to just delete an entity entirely?
+                      $   destroy
+                            e
+                            (Proxy :: Proxy (CanMove, HasHealth, HasLocation))
+                      >>  name e
+                      >>= appendMessage
+                      .   (<> " has died!")
     }
-    -- implement death
+    -- message
   , def
-    { qualifier = hasHealth
-    , everyTick = \_ e -> pure . if getHealth e <= 0
-                    then over message (name e <> " has died!" :)
-                      . over entities (delete e)
-                    else id
+    { qualifier = [C (HasHealth pl), C IsPlayer]
+    , action    = \_ e ->
+                    get e
+                      >>= appendMessage
+                      .   (\n -> "you have " <> show n <> " hp")
+                      .   unHealth
     }
-  , -- implement goal
-    detectWin
+  , def
+    { qualifier = [C (HasLocation pl pl), C IsPlayer]
+    , action    = \_ e -> do
+                    playerLoc <- get e
+                    goalLoc   <- cfold
+                      (\_ (loc :: HasLocation, IsGoal) -> Just loc)
+                      Nothing
+                    when (playerLoc == goalLoc) $ appendMessage "you win!"
+    }
   ]
 
-buildFromEntity :: (System -> Entity -> a -> a) -> a -> Entity -> a
-buildFromEntity f x e =
-  (foldl' (.) id . map (($ e) . f) . filter (($ e) . qualifier) $ systems) x
 
-name :: Entity -> Text
-name = buildFromEntity buildName "something"
+-- run
+-------
 
-represent :: Entity -> Tile
-represent = buildFromEntity buildRepr DefaultTile
+build :: (System -> Entity -> a -> RogueM a) -> a -> Entity -> RogueM a
+build f d entity = foldl'
+  (>=>)
+  (const $ pure d)
+  (map (\s -> whenQualified s . (entity &) . f $ s) systems)
+  entity
+ where
+  whenQualified system m tile = qualified entity (qualifier system)
+    >>= \qual -> (if qual then m else pure) tile
+
+represent :: Entity -> RogueM Tile
+represent = build transRepr ErrorTile
+
+name :: Entity -> RogueM Text
+name = build transName "something"
 
 
--- currently an out-of-bounds entity will just not appear
--- this is bc gset uses ix
-getGrid :: GameState -> EntityGrid
+getGrid :: RogueM EntityGrid
 getGrid =
-  flip compose mkEntityGrid
-    . map setEntity
-    . sortOn (Down . view components)
-    . (^. entities)
-  where setEntity e = mset (e ^. posX) (e ^. posY) (Just e)
+  (members (Proxy :: Proxy HasLocation) >>= mapM get) <&> foldl' go emptyMap
+ where
+  go grid (entity, entityLoc) =
+    mset (posX entityLoc) (posY entityLoc) (Just entity) grid
 
-executeStep :: GameState -> RandM GameState
-executeStep gs =
-  foldr ((<=<) . runSystemET) pure systems (set message [] gs)
-    <&> over message reverse
+executeStep :: Command -> RogueM ()
+executeStep command = do
+  set global $ Message []
+  forM_
+    systems
+    (\s -> do
+      members' <- mapM (\(C (_ :: c)) -> members (Proxy :: Proxy c))
+                       (qualifier s)
+      mapM_ (\e -> whenM (qualified e $ qualifier s) $ action s command e)
+            (foldl' union [] members')
+    )
+  modify global (withMessage reverse)
 
-step :: (EntityGrid -> a) -> StateT GameState RandM a
-step render = do
-  get >>= lift . executeStep >>= put
-  get <&> render . getGrid
+step
+  :: Command
+  -> (EntityGrid -> RogueM a)
+  -> (Message -> RogueM b)
+  -> RogueM (a, b)
+step command renderGrid renderMessage = do
+  executeStep command
+  grid    <- getGrid >>= renderGrid
+  message <- get global >>= renderMessage
+  pure (grid, message)
+
+runRogue :: RogueM a -> IO a
+runRogue f = do
+  rng   <- newStdGen
+  world <- initWorld
+  runRandT (runSystem (populateWorld >> f) world) rng <&> fst

@@ -14,7 +14,6 @@ executable rogue
   main-is: Main.hs
   other-modules:
       Game
-      Game.New
       Game.TH
       Slack
       Utils

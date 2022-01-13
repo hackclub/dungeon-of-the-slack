@@ -2,6 +2,8 @@
 {-# LANGUAGE TemplateHaskell   #-}
 {-# LANGUAGE TupleSections     #-}
 
+-- legally this has to be in a different module
+
 module Game.TH
     ( defComponent
     , mkType

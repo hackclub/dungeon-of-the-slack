@@ -8,7 +8,7 @@ module Main
 
 import           Relude
 
-import           Game.New
+import           Game
 import           Slack
 import           Utils
 
