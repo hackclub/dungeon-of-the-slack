@@ -340,9 +340,9 @@ portalReplace (x, y) = do
     )
     (x, y)
 
--- getNeighborsPortal :: (Int, Int) -> RogueM (HashSet (Int, Int))
--- getNeighborsPortal =
---   getNeighbors >=> mapM portalReplace . toList >=> pure . fromList
+getNeighborsPortal :: (Int, Int) -> RogueM (HashSet (Int, Int))
+getNeighborsPortal =
+  getNeighbors >=> mapM portalReplace . toList >=> pure . fromList
 
 -- TODO account for portals in pathfinding
 pathfind :: (Int, Int) -> (Int, Int) -> RogueM (Maybe [(Int, Int)])
@@ -441,6 +441,34 @@ drinkPotion = def
                   _ -> pure ()
   }
 
+spreadFire :: System
+spreadFire = def
+  { qualifier = [C IsFire]
+  , action    = \_ e -> do
+    neighbors <- get e >>= getNeighborsPortal . fromLocation
+    forM_ neighbors $ \(x, y) -> do
+      spreadTo <- (lift getRandom :: RogueM Double) <&> (< 0.05)
+      fireAt   <- cfold
+        (\found (HasLocation x' y', IsFire) -> found || (x, y) == (x', y'))
+        False
+      when (spreadTo && not fireAt) $ mkEntity_ [C (HasLocation x y), C IsFire]
+  }
+
+takeFireDamage :: System
+takeFireDamage = def
+  { qualifier = [C (HasHealth pl)]
+  , action    = \_ e -> do
+                  HasLocation x y <- get e
+                  onFire          <- cfold
+                    (\found (HasLocation fireX fireY, IsFire) ->
+                      found || (fireX, fireY) == (x, y)
+                    )
+                    False
+                  when onFire $ do
+                    modify e (withHealth pred)
+                    name e >>= appendMessage . (<> " burns...")
+  }
+
 systems :: [System]
 systems =
   [ -- rendering and naming
@@ -467,19 +495,8 @@ systems =
   , moveEvil
   , drinkPotion
     -- passive
-  , def
-    { qualifier = [C (HasHealth pl)]
-    , action    = \_ e -> do
-                    HasLocation x y <- get e
-                    onFire          <- cfold
-                      (\found (HasLocation fireX fireY, IsFire) ->
-                        found || (fireX, fireY) == (x, y)
-                      )
-                      False
-                    when onFire $ do
-                      modify e (withHealth pred)
-                      name e >>= appendMessage . (<> " burns...")
-    }
+  , spreadFire
+  , takeFireDamage
   , def
     { qualifier = [C (HasHealth pl)]
     , action    = \_ e -> get e >>= \(HasHealth x) ->
