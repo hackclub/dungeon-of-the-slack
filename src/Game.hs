@@ -44,7 +44,7 @@ import           Data.Graph.AStar
 import           Data.List                      ( (!!)
                                                 , union
                                                 )
-import qualified Data.Vector.Fixed             as VecF
+import qualified Data.Vector.Fixed             as FVec
 import qualified Data.Vector.Unboxed           as Vec
 
 
@@ -174,7 +174,7 @@ members (_ :: Proxy c) = do
 type EntityGrid = Matrix (Maybe Entity)
 
 emptyMap :: EntityGrid
-emptyMap = (Matrix . VecF.replicate . VecF.replicate) Nothing
+emptyMap = (Matrix . FVec.replicate . FVec.replicate) Nothing
 
 maxCoord :: Int
 maxCoord = matrixSize - 1
@@ -339,10 +339,22 @@ moveTo entity destX destY = do
     .   ((destX, destY) `elem`)
     .   toList
  where
-  attackOrMove = findEntityAt destX destY (Proxy :: Proxy HasHealth)
-    >>= maybe
-          (set entity $ HasLocation destX destY)
+  attackOrMove = do
+    hasHealthAt <- findEntityAt destX destY (Proxy :: Proxy HasHealth)
+    portalAt    <- cfold
+      (\found (HasLocation x y, IsPortal p) ->
+        found || (p == In && (x, y) == (destX, destY))
+      )
+      False
+    (destX', destY') <- if portalAt
+      then do
+        cfold
+          (\l (HasLocation x y, IsPortal p) -> if p == Out then (x, y) else l)
+          (destX, destY)
+      else pure (destX, destY)
+    maybe (set entity $ HasLocation destX' destY')
           (flip modify $ withHealth pred)
+          hasHealthAt
 
 
 -- tiles
