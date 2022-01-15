@@ -189,7 +189,7 @@ appendMessage text = modify global $ withMessage (text :)
 -- location
 
 fromLocation :: HasLocation -> (Int, Int)
-fromLocation loc = (posX loc, posY loc)
+fromLocation (HasLocation x y) = (x, y)
 
 entityExistsAt :: Int -> Int -> RogueM Bool
 entityExistsAt x y =
@@ -323,6 +323,28 @@ getNeighbors (x, y) =
           [(x, y - 1), (x + 1, y), (x, y + 1), (x - 1, y)]
     <&> fromList
 
+portalReplace :: (Int, Int) -> RogueM (Int, Int)
+portalReplace (x, y) = do
+  portalAt <- cfold
+    (\found (HasLocation x' y', IsPortal p) ->
+      found || (p == In && (x, y) == (x', y'))
+    )
+    False
+  (if portalAt
+      then do
+        cfold
+          (\loc (HasLocation x' y', IsPortal p) ->
+            if p == Out then (x', y') else loc
+          )
+      else pure
+    )
+    (x, y)
+
+-- getNeighborsPortal :: (Int, Int) -> RogueM (HashSet (Int, Int))
+-- getNeighborsPortal =
+--   getNeighbors >=> mapM portalReplace . toList >=> pure . fromList
+
+-- TODO account for portals in pathfinding
 pathfind :: (Int, Int) -> (Int, Int) -> RogueM (Maybe [(Int, Int)])
 pathfind begin dest = aStarM getNeighbors
                              (\_ _ -> pure (1 :: Int))
@@ -340,21 +362,10 @@ moveTo entity destX destY = do
     .   toList
  where
   attackOrMove = do
-    hasHealthAt <- findEntityAt destX destY (Proxy :: Proxy HasHealth)
-    portalAt    <- cfold
-      (\found (HasLocation x y, IsPortal p) ->
-        found || (p == In && (x, y) == (destX, destY))
-      )
-      False
-    (destX', destY') <- if portalAt
-      then do
-        cfold
-          (\l (HasLocation x y, IsPortal p) -> if p == Out then (x, y) else l)
-          (destX, destY)
-      else pure (destX, destY)
-    maybe (set entity $ HasLocation destX' destY')
-          (flip modify $ withHealth pred)
-          hasHealthAt
+    (destX', destY') <- portalReplace (destX, destY)
+    findEntityAt destX destY (Proxy :: Proxy HasHealth) >>= maybe
+      (set entity $ HasLocation destX' destY')
+      (flip modify $ withHealth pred)
 
 
 -- tiles
@@ -456,6 +467,19 @@ systems =
   , moveEvil
   , drinkPotion
     -- passive
+  , def
+    { qualifier = [C (HasHealth pl)]
+    , action    = \_ e -> do
+                    HasLocation x y <- get e
+                    onFire          <- cfold
+                      (\found (HasLocation fireX fireY, IsFire) ->
+                        found || (fireX, fireY) == (x, y)
+                      )
+                      False
+                    when onFire $ do
+                      modify e (withHealth pred)
+                      name e >>= appendMessage . (<> " burns...")
+    }
   , def
     { qualifier = [C (HasHealth pl)]
     , action    = \_ e -> get e >>= \(HasHealth x) ->
