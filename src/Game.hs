@@ -527,6 +527,15 @@ systems =
                       Nothing
                     when (playerLoc == goalLoc) $ appendMessage "you win!"
     }
+  , def
+    { qualifier = [C IsPlayer]
+    , action    = \_ e -> do
+                    addRandomMessage <- (< (0.1 :: Double)) <$> lift getRandom
+                    when addRandomMessage
+                      $   (lift . randomChoice)
+                            ["placeholder msg 1", "placeholder msg 2"]
+                      >>= appendMessage
+    }
   ]
 
 
