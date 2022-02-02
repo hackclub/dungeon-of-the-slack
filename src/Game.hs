@@ -11,8 +11,6 @@
 {-# LANGUAGE TemplateHaskell           #-}
 {-# LANGUAGE TypeFamilies              #-}
 
--- TODO re-add portals, fire
-
 module Game
   ( RogueM
   , EntityGrid
@@ -65,6 +63,30 @@ instance Monoid Message where
 withMessage :: ([Text] -> [Text]) -> Message -> Message
 withMessage f = Message . f . unMessage
 
+data GameStage = Intro | MainGame
+defComponent "InGameStage"
+  [("unGameStage", mkType ''GameStage [])]
+  ''Global
+
+instance Semigroup InGameStage where
+  InGameStage MainGame <> _                    = InGameStage MainGame
+  _                    <> InGameStage MainGame = InGameStage MainGame
+  _                    <> _                    = InGameStage Intro
+instance Monoid InGameStage where
+  mempty = InGameStage Intro
+
+defComponent "TurnsElapsed"
+  [("unTurnsElapsed", mkType ''Int [])]
+  ''Global
+
+instance Semigroup TurnsElapsed where
+  TurnsElapsed x <> TurnsElapsed y = TurnsElapsed (x + y)
+instance Monoid TurnsElapsed where
+  mempty = TurnsElapsed 0
+
+withTurnsElapsed :: (Int -> Int) -> TurnsElapsed -> TurnsElapsed
+withTurnsElapsed f = TurnsElapsed . f . unTurnsElapsed
+
 -- abilities
 
 defComponent "CanMove" [] ''Map
@@ -112,6 +134,8 @@ defComponent "IsPlayer" [] ''Unique
 --------
 
 makeWorld "World" [ ''Message
+                  , ''InGameStage
+                  , ''TurnsElapsed
                   , ''CanMove
                   , ''HasHealth
                   , ''HasLocation
@@ -529,7 +553,7 @@ systems =
     }
   , def
     { qualifier = [C IsPlayer]
-    , action    = \_ e -> do
+    , action    = \_ _ -> do
                     addRandomMessage <- (< (0.1 :: Double)) <$> lift getRandom
                     when addRandomMessage
                       $   (lift . randomChoice)
@@ -537,6 +561,25 @@ systems =
                       >>= appendMessage
     }
   ]
+
+
+-- global systems
+-----------------
+
+displayIntro :: Command -> RogueM ()
+displayIntro _ = get global >>= \case
+  (InGameStage Intro, TurnsElapsed 1) -> do
+    appendMessage "[enter main game message]"
+    populateWorld
+    set global $ InGameStage MainGame
+  (InGameStage Intro, _) -> appendMessage "[intro message]"
+  _                      -> pure ()
+
+incrementTurns :: Command -> RogueM ()
+incrementTurns _ = modify global $ withTurnsElapsed succ
+
+globalSystems :: [Command -> RogueM ()]
+globalSystems = [displayIntro, incrementTurns]
 
 
 -- run
@@ -569,6 +612,7 @@ getGrid =
 executeStep :: Command -> RogueM ()
 executeStep command = do
   set global $ Message []
+  forM_ globalSystems (\f -> f command)
   forM_
     systems
     (\s -> do
@@ -594,4 +638,5 @@ runRogue :: RogueM a -> IO a
 runRogue f = do
   rng   <- newStdGen
   world <- initWorld
-  runRandT (runSystem (populateWorld >> f) world) rng <&> fst
+  -- runRandT (runSystem (populateWorld >> f) world) rng <&> fst
+  runRandT (runSystem f world) rng <&> fst
