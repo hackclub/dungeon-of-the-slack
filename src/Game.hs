@@ -439,9 +439,7 @@ descendStaircase = def
   { qualifier = [C IsPlayer]
   , action    = \c _ -> case c of
                   Drink -> do
-                    cmapM_ $ \(HasLocation x y, Not :: Not IsPlayer, entity) -> do
-                      name entity >>= putTextLn
-                      print (x, y)
+                    cmapM_ $ \(HasLocation _ _, entity) ->
                       destroy entity (Proxy :: Proxy HasLocation)
                     populateWorld
                   _ -> pure ()
