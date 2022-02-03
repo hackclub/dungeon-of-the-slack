@@ -78,7 +78,7 @@ renderGrid es =
     Just PotionTile       -> ":rogue__potion:"
     Just (PortalTile In ) -> ":rogue__portal_in:"
     Just (PortalTile Out) -> ":rogue__portal_out:"
-    Just GoalTile         -> ":rogue__goal:"
+    Just StaircaseTile    -> ":rogue__staircase:"
     Just PlayerTile       -> ":rogue__player:"
     Just ErrorTile        -> ":rogue__default:"
     Nothing               -> ":rogue__blank:"

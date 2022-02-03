@@ -65,7 +65,7 @@ withMessage f = Message . f . unMessage
 
 data GameStage = Intro | MainGame
 defComponent "InGameStage"
-  [("unGameStage", mkType ''GameStage [])]
+  [("_unGameStage", mkType ''GameStage [])]
   ''Global
 
 instance Semigroup InGameStage where
@@ -120,9 +120,9 @@ defComponent "IsPotion"
   [("unPotion", mkType ''Int [])]
   ''Map
 
--- goal
+-- staircase
 
-defComponent "IsGoal" [] ''Map
+defComponent "IsStaircase" [] ''Map
 
 -- alive
 
@@ -144,7 +144,7 @@ makeWorld "World" [ ''Message
                   , ''IsFire
                   , ''IsPortal
                   , ''IsPotion
-                  , ''IsGoal
+                  , ''IsStaircase
                   , ''IsEvil
                   , ''IsPlayer]
 
@@ -334,7 +334,7 @@ populateWorld = do
   replicateM_ 5 $ mkEntityOnEmpty_ [C CanMove, C (HasHealth 3), C IsEvil]
   replicateM_ 3 $ randomItemComponents >>= mkEntityOnEmpty_
   forM_ [C (IsPortal In), C (IsPortal Out)] $ mkEntityOnEmpty_ . (: [])
-  mkEntityOnEmpty_ [C IsGoal]
+  mkEntityOnEmpty_ [C IsStaircase]
   mkEntityOnEmpty_ [C CanMove, C (HasHealth 10), C IsPlayer]
 
 
@@ -401,7 +401,7 @@ data Tile = WallTile
           | FireTile
           | PotionTile
           | PortalTile Portal
-          | GoalTile
+          | StaircaseTile
           | PlayerTile
           | ErrorTile
           deriving Eq
@@ -433,6 +433,19 @@ trivialRender comp tile name' = def { qualifier = [comp]
                                     , transRepr = \_ _ -> pure tile
                                     , transName = \_ _ -> pure name'
                                     }
+
+descendStaircase :: System
+descendStaircase = def
+  { qualifier = [C IsPlayer]
+  , action    = \c _ -> case c of
+                  Drink -> do
+                    cmapM_ $ \(HasLocation x y, Not :: Not IsPlayer, entity) -> do
+                      name entity >>= putTextLn
+                      print (x, y)
+                      destroy entity (Proxy :: Proxy HasLocation)
+                    populateWorld
+                  _ -> pure ()
+  }
 
 moveEvil :: System
 moveEvil = def
@@ -505,9 +518,10 @@ systems =
         , transRepr = \e _ -> get e <&> PortalTile . portalType
         , transName = \_ _ -> pure "a portal"
         }
-  , trivialRender (C IsGoal)   GoalTile   "the goal"
-  , trivialRender (C IsPlayer) PlayerTile "the player"
+  , trivialRender (C IsStaircase) StaircaseTile "a staircase"
+  , trivialRender (C IsPlayer)    PlayerTile    "the player"
     -- active
+  , descendStaircase
   , def
     { qualifier = [C (HasLocation pl pl), C CanMove, C IsPlayer]
     , action    = \c e -> case c of
@@ -541,15 +555,6 @@ systems =
                       >>= appendMessage
                       .   (\n -> "you have " <> show n <> " hp")
                       .   unHealth
-    }
-  , def
-    { qualifier = [C (HasLocation pl pl), C IsPlayer]
-    , action    = \_ e -> do
-                    playerLoc <- get e
-                    goalLoc   <- cfold
-                      (\_ (loc :: HasLocation, IsGoal) -> Just loc)
-                      Nothing
-                    when (playerLoc == goalLoc) $ appendMessage "you win!"
     }
   , def
     { qualifier = [C IsPlayer]
