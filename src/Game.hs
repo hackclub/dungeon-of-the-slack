@@ -64,12 +64,14 @@ instance Monoid Message where
 withMessage :: ([Text] -> [Text]) -> Message -> Message
 withMessage f = Message . f . unMessage
 
-data GameStage = Intro | MainGame
+data GameStage = Intro | MainGame | GameOver
 defComponent "InGameStage"
   [("_unGameStage", mkType ''GameStage [])]
   ''Global
 
 instance Semigroup InGameStage where
+  InGameStage GameOver <> _                    = InGameStage GameOver
+  _                    <> InGameStage GameOver = InGameStage GameOver
   InGameStage MainGame <> _                    = InGameStage MainGame
   _                    <> InGameStage MainGame = InGameStage MainGame
   _                    <> _                    = InGameStage Intro
@@ -296,7 +298,9 @@ randomItemComponents = do
 -- commands
 -----------
 
-data Command = Noop | Move (Int, Int) | Drink deriving Eq
+-- `IncrementTimer` is not really a command, 
+-- but indicates that most systems shouldn't run
+data Command = IncrementTimer | Noop | Move (Int, Int) | Drink deriving Eq
 
 
 -- initialization
@@ -462,19 +466,19 @@ data Tile = WallTile
 ----------
 
 data System = System
-  { qualifier   :: [ComponentBox]
-  , action      :: Command -> Entity -> RogueM ()
-  , transRepr   :: Entity -> Tile -> RogueM Tile
-  , transName   :: Entity -> Text -> RogueM Text
-  , requireNoop :: Bool
+  { qualifier      :: [ComponentBox]
+  , action         :: Command -> Entity -> RogueM ()
+  , transRepr      :: Entity -> Tile -> RogueM Tile
+  , transName      :: Entity -> Text -> RogueM Text
+  , forbidIncTimer :: Bool
   }
 
 instance Default System where
-  def = System { qualifier   = []
-               , action      = \_ _ -> pure ()
-               , transRepr   = const pure
-               , transName   = const pure
-               , requireNoop = True
+  def = System { qualifier      = []
+               , action         = \_ _ -> pure ()
+               , transRepr      = const pure
+               , transName      = const pure
+               , forbidIncTimer = True
                }
 
 qualified :: Entity -> [ComponentBox] -> RogueM Bool
@@ -576,12 +580,13 @@ systems =
   , takeFireDamage
   , def
     { qualifier = [C (HasHealth pl)]
-    , action    = \_ e -> get e >>= \(HasHealth x) ->
-                    when (x <= 0)
-                      $   set e Deleted
-                      >>  name e
-                      >>= appendMessage
-                      .   (<> " has died!")
+    , action    = \_ e -> get e >>= \(HasHealth x) -> when (x <= 0) $ do
+                    set e Deleted
+                    name e >>= appendMessage . (<> " has died!")
+                    whenM (exists e (Proxy :: Proxy IsPlayer)) $ do
+                      get global >>= \(SecsElapsed secs) -> appendMessage
+                        ("you survived for " <> show secs <> " seconds!")
+                      set global $ InGameStage GameOver
     }
     -- message
   , def
@@ -609,12 +614,12 @@ systems =
 
 clearMessage :: Command -> RogueM ()
 clearMessage command = case command of
-  Noop -> pure ()
-  _    -> set global $ Message ["..."]
+  IncrementTimer -> pure ()
+  _              -> set global $ Message ["..."]
 
 displayIntro :: Command -> RogueM ()
 displayIntro _ = get global >>= \case
-  (InGameStage Intro, TurnsElapsed 1) -> do
+  (InGameStage Intro, TurnsElapsed 2) -> do
     appendMessage "you enter the dungeon..."
     populateWorld
     set global $ InGameStage MainGame
@@ -623,7 +628,7 @@ displayIntro _ = get global >>= \case
 
 incrementTurns :: Command -> RogueM ()
 incrementTurns command =
-  unless (command == Noop) $ modify global $ withTurnsElapsed succ
+  unless (command == IncrementTimer) $ modify global $ withTurnsElapsed succ
 
 globalSystemsPre :: [Command -> RogueM ()]
 globalSystemsPre = [clearMessage, displayIntro, incrementTurns]
@@ -631,7 +636,7 @@ globalSystemsPre = [clearMessage, displayIntro, incrementTurns]
 
 incrementSecs :: Command -> RogueM ()
 incrementSecs = \case
-  Noop -> get global >>= \case
+  IncrementTimer -> get global >>= \case
     InGameStage MainGame -> modify global $ withSecsElapsed succ
     _                    -> pure ()
   _ -> pure ()
@@ -647,8 +652,8 @@ displaySecs _ = do
 
 reverseMessage :: Command -> RogueM ()
 reverseMessage command = case command of
-  Noop -> pure ()
-  _    -> modify global $ withMessage reverse
+  IncrementTimer -> pure ()
+  _              -> modify global $ withMessage reverse
 
 globalSystemsPost :: [Command -> RogueM ()]
 globalSystemsPost = [reverseMessage, incrementSecs, displaySecs]
@@ -687,7 +692,7 @@ executeStep command = do
   forM_ globalSystemsPre (\f -> f command)
   forM_
     systems
-    (\s -> unless (requireNoop s && command == Noop) $ do
+    (\s -> unless (forbidIncTimer s && command == IncrementTimer) $ do
       members' <- mapM (\(C (_ :: c)) -> members (Proxy :: Proxy c))
                        (qualifier s)
       mapM_
@@ -706,16 +711,18 @@ step
   :: Command
   -> (EntityGrid -> RogueM a)
   -> (Message -> RogueM b)
-  -> RogueM (a, b)
+  -> RogueM (a, b, Bool)
 step command renderGrid renderMessage = do
   executeStep command
-  grid    <- getGrid >>= renderGrid
-  message <- get global >>= renderMessage
-  pure (grid, message)
+  grid     <- getGrid >>= renderGrid
+  message  <- get global >>= renderMessage
+  gameOver <- get global >>= \case
+    InGameStage GameOver -> pure True
+    _                    -> pure False
+  pure (grid, message, gameOver)
 
 runRogue :: RogueM a -> IO a
 runRogue f = do
   rng   <- newStdGen
   world <- initWorld
-  -- runRandT (runSystem (populateWorld >> f) world) rng <&> fst
   runRandT (runSystem f world) rng <&> fst

@@ -43,7 +43,8 @@ addReacts timestamp = do
     ask
   void . liftIO . forkIO $ mapM_
     (reactToMessage session token channelID timestamp)
-    [ "tw_arrow_up"
+    [ "tw_hourglass"
+    , "tw_arrow_up"
     , "tw_arrow_right"
     , "tw_arrow_down"
     , "tw_arrow_left"
@@ -52,6 +53,7 @@ addReacts timestamp = do
 
 fromReact :: Text -> Command
 fromReact = \case
+  "tw_hourglass"   -> Noop
   "tw_arrow_up"    -> Move (0, -1)
   "tw_arrow_right" -> Move (1, 0)
   "tw_arrow_down"  -> Move (0, 1)
@@ -99,12 +101,12 @@ renderGrid es =
     let [a, b, c, d] = l
     return $ a && b && not (c && d)
 
-stepAndSend :: Maybe Text -> Command -> AppM Text
+stepAndSend :: Maybe Text -> Command -> AppM (Text, Bool)
 stepAndSend edit cmd = do
   Context { ctxSession = session, ctxAPIToken = token, ctxChannelID = channelID } <-
     ask
 
-  (renderedGrid, message) <- lift
+  (renderedGrid, message, gameOver) <- lift
     $ step cmd renderGrid (pure . unlines . unMessage)
   let text = message <> "\n" <> renderedGrid
 
@@ -113,14 +115,15 @@ stepAndSend edit cmd = do
       timestamp <-
         liftIO $ sendMessage session token channelID text <&> fromJust
       addReacts timestamp
-      return timestamp
+      return (timestamp, gameOver)
     Just timestamp -> do
       void . liftIO . forkIO $ editMessage session
                                            token
                                            channelID
                                            timestamp
                                            text
-      return timestamp
+
+      return (timestamp, gameOver)
 
 handleMsg :: Text -> Chan (Maybe Text, Command) -> EventHandler IO
 handleMsg timestamp channel msg = do
@@ -137,18 +140,20 @@ handleMsg timestamp channel msg = do
 
 app :: AppM ()
 app = do
-  context   <- ask
-  timestamp <- stepAndSend Nothing Noop
-  channel   <- liftIO newChan
+  context        <- ask
+  (timestamp, _) <- stepAndSend Nothing Noop
+  channel        <- liftIO newChan
   void . liftIO . forkIO $ wsConnect (ctxSession context)
                                      (ctxWSToken context)
                                      (handleMsg timestamp channel)
   void . liftIO . forkIO . forever $ do
     threadDelay 1000000
-    writeChan channel (Just timestamp, Noop)
-  forever $ do
-    (timestamp', command) <- liftIO $ readChan channel
-    stepAndSend timestamp' command
+    writeChan channel (Just timestamp, IncrementTimer)
+  let gameLoop = do
+        (timestamp', command ) <- liftIO $ readChan channel
+        (_         , gameOver) <- stepAndSend timestamp' command
+        unless gameOver $ gameLoop
+  gameLoop
 
 main :: IO ()
 main = do
@@ -164,7 +169,7 @@ main = do
                             , ctxWSToken   = wst
                             , ctxChannelID = channelID
                             }
-      runRogue $ runReaderT app context
+      forever $ runRogue (runReaderT app context)
 
     _ ->
       void
