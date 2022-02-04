@@ -18,7 +18,9 @@ import           Data.Maybe                     ( fromJust )
 import           Network.Wreq.Session           ( Session )
 import qualified Network.Wreq.Session          as S
 import           System.Environment             ( lookupEnv )
-import           UnliftIO.Concurrent            ( forkIO )
+import           UnliftIO.Concurrent            ( forkIO
+                                                , threadDelay
+                                                )
 
 
 data Context = Context
@@ -125,9 +127,8 @@ handleMsg timestamp channel msg = do
   putStrLn $ "Message from socket: " <> show msg
   case msg of
     ReactionAdd e u -> do
-      unless (u == rogueUserId) . void $ writeChan
-        channel
-        (Just timestamp, fromReact e)
+      unless (u == rogueUserId)
+        $ writeChan channel (Just timestamp, fromReact e)
       return BasicRes
 
     _ -> do
@@ -142,6 +143,9 @@ app = do
   void . liftIO . forkIO $ wsConnect (ctxSession context)
                                      (ctxWSToken context)
                                      (handleMsg timestamp channel)
+  void . liftIO . forkIO . forever $ do
+    threadDelay 1000000
+    writeChan channel (Just timestamp, Noop)
   forever $ do
     (timestamp', command) <- liftIO $ readChan channel
     stepAndSend timestamp' command

@@ -36,6 +36,7 @@ import           Relude                  hiding ( Map
 import           Game.TH
 import           Utils
 
+import qualified Control.Lens                  as L
 import           Control.Monad.Random    hiding ( fromList )
 import           Data.Default
 import           Data.Graph.AStar
@@ -87,6 +88,18 @@ instance Monoid TurnsElapsed where
 withTurnsElapsed :: (Int -> Int) -> TurnsElapsed -> TurnsElapsed
 withTurnsElapsed f = TurnsElapsed . f . unTurnsElapsed
 
+defComponent "SecsElapsed"
+  [("unSecsElapsed", mkType ''Int [])]
+  ''Global
+
+instance Semigroup SecsElapsed where
+  SecsElapsed x <> SecsElapsed y = SecsElapsed (x + y)
+instance Monoid SecsElapsed where
+  mempty = SecsElapsed 0
+
+withSecsElapsed :: (Int -> Int) -> SecsElapsed -> SecsElapsed
+withSecsElapsed f = SecsElapsed . f . unSecsElapsed
+
 -- abilities
 
 defComponent "CanMove" [] ''Map
@@ -136,6 +149,7 @@ defComponent "IsPlayer" [] ''Unique
 makeWorld "World" [ ''Message
                   , ''InGameStage
                   , ''TurnsElapsed
+                  , ''SecsElapsed
                   , ''CanMove
                   , ''HasHealth
                   , ''HasLocation
@@ -267,7 +281,7 @@ randomItemComponents = do
 -- commands
 -----------
 
-data Command = Noop | Move (Int, Int) | Drink
+data Command = Noop | Move (Int, Int) | Drink deriving Eq
 
 
 -- initialization
@@ -411,17 +425,19 @@ data Tile = WallTile
 ----------
 
 data System = System
-  { qualifier :: [ComponentBox]
-  , action    :: Command -> Entity -> RogueM ()
-  , transRepr :: Entity -> Tile -> RogueM Tile
-  , transName :: Entity -> Text -> RogueM Text
+  { qualifier   :: [ComponentBox]
+  , action      :: Command -> Entity -> RogueM ()
+  , transRepr   :: Entity -> Tile -> RogueM Tile
+  , transName   :: Entity -> Text -> RogueM Text
+  , requireNoop :: Bool
   }
 
 instance Default System where
-  def = System { qualifier = []
-               , action    = \_ _ -> pure ()
-               , transRepr = const pure
-               , transName = const pure
+  def = System { qualifier   = []
+               , action      = \_ _ -> pure ()
+               , transRepr   = const pure
+               , transName   = const pure
+               , requireNoop = True
                }
 
 qualified :: Entity -> [ComponentBox] -> RogueM Bool
@@ -433,17 +449,6 @@ trivialRender comp tile name' = def { qualifier = [comp]
                                     , transRepr = \_ _ -> pure tile
                                     , transName = \_ _ -> pure name'
                                     }
-
-descendStaircase :: System
-descendStaircase = def
-  { qualifier = [C IsPlayer]
-  , action    = \c _ -> case c of
-                  Drink -> do
-                    cmapM_ $ \(HasLocation _ _, entity) ->
-                      destroy entity (Proxy :: Proxy HasLocation)
-                    populateWorld
-                  _ -> pure ()
-  }
 
 moveEvil :: System
 moveEvil = def
@@ -519,7 +524,6 @@ systems =
   , trivialRender (C IsStaircase) StaircaseTile "a staircase"
   , trivialRender (C IsPlayer)    PlayerTile    "the player"
     -- active
-  , descendStaircase
   , def
     { qualifier = [C (HasLocation pl pl), C CanMove, C IsPlayer]
     , action    = \c e -> case c of
@@ -569,20 +573,51 @@ systems =
 -- global systems
 -----------------
 
+clearMessage :: Command -> RogueM ()
+clearMessage command = case command of
+  Noop -> pure ()
+  _    -> set global $ Message ["..."]
+
 displayIntro :: Command -> RogueM ()
 displayIntro _ = get global >>= \case
   (InGameStage Intro, TurnsElapsed 1) -> do
-    appendMessage "[enter main game message]"
+    appendMessage "you enter the dungeon..."
     populateWorld
     set global $ InGameStage MainGame
-  (InGameStage Intro, _) -> appendMessage "[intro message]"
+  (InGameStage Intro, _) -> set global $ Message ["[intro message]"]
   _                      -> pure ()
 
 incrementTurns :: Command -> RogueM ()
-incrementTurns _ = modify global $ withTurnsElapsed succ
+incrementTurns command =
+  unless (command == Noop) $ modify global $ withTurnsElapsed succ
 
-globalSystems :: [Command -> RogueM ()]
-globalSystems = [displayIntro, incrementTurns]
+globalSystemsPre :: [Command -> RogueM ()]
+globalSystemsPre = [clearMessage, displayIntro, incrementTurns]
+
+
+incrementSecs :: Command -> RogueM ()
+incrementSecs = \case
+  Noop -> get global >>= \case
+    InGameStage MainGame -> modify global $ withSecsElapsed succ
+    _                    -> pure ()
+  _ -> pure ()
+
+displaySecs :: Command -> RogueM ()
+displaySecs _ = do
+  (InGameStage stage, SecsElapsed secs) <- get global
+  case stage of
+    MainGame -> modify global . withMessage $ L.set
+      (L.ix 0)
+      ((<> " seconds...") . show $ secs)
+    _ -> pure ()
+
+reverseMessage :: Command -> RogueM ()
+reverseMessage command = case command of
+  Noop -> pure ()
+  _    -> modify global $ withMessage reverse
+
+globalSystemsPost :: [Command -> RogueM ()]
+globalSystemsPost = [reverseMessage, incrementSecs, displaySecs]
 
 
 -- run
@@ -614,17 +649,16 @@ getGrid =
 
 executeStep :: Command -> RogueM ()
 executeStep command = do
-  set global $ Message []
-  forM_ globalSystems (\f -> f command)
+  forM_ globalSystemsPre (\f -> f command)
   forM_
     systems
-    (\s -> do
+    (\s -> unless (requireNoop s && command == Noop) $ do
       members' <- mapM (\(C (_ :: c)) -> members (Proxy :: Proxy c))
                        (qualifier s)
       mapM_ (\e -> whenM (qualified e $ qualifier s) $ action s command e)
             (foldl' union [] members')
     )
-  modify global (withMessage reverse)
+  forM_ globalSystemsPost (\f -> f command)
 
 step
   :: Command
