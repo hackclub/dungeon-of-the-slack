@@ -100,6 +100,10 @@ instance Monoid SecsElapsed where
 withSecsElapsed :: (Int -> Int) -> SecsElapsed -> SecsElapsed
 withSecsElapsed f = SecsElapsed . f . unSecsElapsed
 
+-- deleted?
+
+defComponent "Deleted" [] ''Map
+
 -- abilities
 
 defComponent "CanMove" [] ''Map
@@ -150,6 +154,7 @@ makeWorld "World" [ ''Message
                   , ''InGameStage
                   , ''TurnsElapsed
                   , ''SecsElapsed
+                  , ''Deleted
                   , ''CanMove
                   , ''HasHealth
                   , ''HasLocation
@@ -235,7 +240,7 @@ entityExistsAt x y =
 
 findEntityAt :: Gettable c => Int -> Int -> Proxy c -> RogueM (Maybe Entity)
 findEntityAt x y (_ :: Proxy c) =
-  members (Proxy :: Proxy (HasLocation, c))
+  members (Proxy :: Proxy (HasLocation, c, Not Deleted))
     >>= mapM get
     <&> listToMaybe
     .   mapMaybe
@@ -244,8 +249,11 @@ findEntityAt x y (_ :: Proxy c) =
           )
 
 wallExistsAt :: Int -> Int -> RogueM Bool
-wallExistsAt x y =
-  cfold (\found (comp, IsWall) -> found || fromLocation comp == (x, y)) False
+wallExistsAt x y = cfold
+  (\found (comp, IsWall, Not :: Not Deleted) ->
+    found || fromLocation comp == (x, y)
+  )
+  False
 
 randomCoord :: RogueM (Int, Int)
 randomCoord = do
@@ -258,6 +266,13 @@ randomCoordNoEdge = do
   x <- lift $ getRandomR (1, maxCoord - 1)
   y <- lift $ getRandomR (1, maxCoord - 1)
   pure (x, y)
+
+mkEntityOnEmpty :: [ComponentBox] -> RogueM Entity
+mkEntityOnEmpty ss = do
+  (x, y) <- randomCoord
+  entityExistsAt x y >>= \occupied -> if occupied
+    then mkEntityOnEmpty ss
+    else mkEntity $ C (HasLocation x y) : ss
 
 mkEntityOnEmpty_ :: [ComponentBox] -> RogueM ()
 mkEntityOnEmpty_ ss = do
@@ -301,9 +316,10 @@ mkWalls = mkWalls' 25 where
 
         adjEntityLocs :: RogueM [HasLocation]
         adjEntityLocs = cfold
-          (\ls loc -> if abs (pos2 loc - dim2) < 3 && pos1 loc - dim1 == 0
-            then loc : ls
-            else ls
+          (\ls (loc, Not :: Not Deleted) ->
+            if abs (pos2 loc - dim2) < 3 && pos1 loc - dim1 == 0
+              then loc : ls
+              else ls
           )
           []
 
@@ -324,7 +340,7 @@ mkWalls = mkWalls' 25 where
         safeInc n' = if n' == matrixSize - 1 then n' else succ n'
         safeDec n' = if n' == 0 then n' else pred n'
 
-    entities  <- members (Proxy :: Proxy HasLocation)
+    entities  <- members (Proxy :: Proxy (HasLocation, Not Deleted))
     dimRanges <- sequence
       [ constrainWalls isMin entities | isMin <- [True, False] ]
 
@@ -349,12 +365,26 @@ mkWalls = mkWalls' 25 where
 
 populateWorld :: RogueM ()
 populateWorld = do
-  mkWalls
-  replicateM_ 5 $ mkEntityOnEmpty_ [C CanMove, C (HasHealth 3), C IsEvil]
-  replicateM_ 3 $ randomItemComponents >>= mkEntityOnEmpty_
-  forM_ [C (IsPortal In), C (IsPortal Out)] $ mkEntityOnEmpty_ . (: [])
-  mkEntityOnEmpty_ [C IsStaircase]
-  mkEntityOnEmpty_ [C CanMove, C (HasHealth 10), C IsPlayer]
+  (staircase, player) <- populateWorld'
+  HasLocation sx sy   <- get staircase
+  HasLocation px py   <- get player
+  pathfind (px, py) (sx, sy) >>= \case
+    Nothing   -> tryAgain
+    Just path -> unless (length path > 12) tryAgain
+ where
+  populateWorld' = do
+    mkWalls
+    replicateM_ 5 $ mkEntityOnEmpty_ [C CanMove, C (HasHealth 3), C IsEvil]
+    replicateM_ 3 $ randomItemComponents >>= mkEntityOnEmpty_
+    forM_ [C (IsPortal In), C (IsPortal Out)] $ mkEntityOnEmpty_ . (: [])
+    staircase <- mkEntityOnEmpty [C IsStaircase]
+    player    <- mkEntityOnEmpty [C CanMove, C (HasHealth 10), C IsPlayer]
+
+    pure (staircase, player)
+
+  tryAgain = do
+    cmapM_ $ \(HasLocation _ _, entity) -> set entity Deleted
+    populateWorld
 
 
 -- movement
@@ -362,9 +392,11 @@ populateWorld = do
 
 getNeighbors :: (Int, Int) -> RogueM (HashSet (Int, Int))
 getNeighbors (x, y) =
-  filterM (fmap not . uncurry wallExistsAt)
-          [(x, y - 1), (x + 1, y), (x, y + 1), (x - 1, y)]
-    <&> fromList
+  fmap fromList
+    . filterM (fmap not . uncurry wallExistsAt)
+    . filter
+        (\(x', y') -> x' >= 0 && x' < matrixSize && y' >= 0 && y' < matrixSize)
+    $ [(x, y - 1), (x + 1, y), (x, y + 1), (x - 1, y)]
 
 portalReplace :: (Int, Int) -> RogueM (Int, Int)
 portalReplace (x, y) = do
@@ -480,7 +512,7 @@ drinkPotion = def
                       (pure ())
                       (\e' -> do
                         get e' >>= modify e . withHealth . (+) . unPotion
-                        destroy e' (Proxy :: Proxy HasLocation)
+                        set e' Deleted
                         appendMessage "you feel rejuvenated..."
                       )
                   _ -> pure ()
@@ -546,10 +578,7 @@ systems =
     { qualifier = [C (HasHealth pl)]
     , action    = \_ e -> get e >>= \(HasHealth x) ->
                     when (x <= 0)
-                    -- no way to just delete an entity entirely?
-                      $   destroy
-                            e
-                            (Proxy :: Proxy (CanMove, HasHealth, HasLocation))
+                      $   set e Deleted
                       >>  name e
                       >>= appendMessage
                       .   (<> " has died!")
@@ -647,7 +676,8 @@ name = build transName "something"
 
 getGrid :: RogueM EntityGrid
 getGrid =
-  (members (Proxy :: Proxy HasLocation) >>= mapM get) <&> foldl' go emptyMap
+  (members (Proxy :: Proxy (HasLocation, Not Deleted)) >>= mapM get)
+    <&> foldl' go emptyMap
  where
   go grid (entity, entityLoc) =
     mset (posX entityLoc) (posY entityLoc) (Just entity) grid
@@ -660,8 +690,15 @@ executeStep command = do
     (\s -> unless (requireNoop s && command == Noop) $ do
       members' <- mapM (\(C (_ :: c)) -> members (Proxy :: Proxy c))
                        (qualifier s)
-      mapM_ (\e -> whenM (qualified e $ qualifier s) $ action s command e)
-            (foldl' union [] members')
+      mapM_
+        (\e ->
+          whenM
+              (   qualified e (qualifier s)
+              &&^ exists e (Proxy :: Proxy (Not Deleted))
+              )
+            $ action s command e
+        )
+        (foldl' union [] members')
     )
   forM_ globalSystemsPost (\f -> f command)
 
