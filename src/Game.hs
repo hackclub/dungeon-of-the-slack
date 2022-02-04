@@ -311,13 +311,18 @@ mkWalls = mkWalls' 25 where
           (\case
               [] -> pure $ if isMin then Just 0 else Just (matrixSize - 1)
               (e, loc) : _ -> existsBoxed e (C IsDoor) >>= \isDoor ->
-                pure $ if isDoor then Nothing else (Just . pos1) loc
+                pure $ if isDoor
+                  then Nothing
+                  else (Just . (if isMin then safeInc else safeDec) . pos1) loc
             )
             .   (if isMin then reverse else id)
             .   sortOn (pos1 . snd)
             .   filter ((if isMin then (>=) else (<=)) dim1 . pos1 . snd)
             .   filter ((== dim2) . pos2 . snd)
             <=< mapM get
+
+        safeInc n' = if n' == matrixSize - 1 then n' else succ n'
+        safeDec n' = if n' == 0 then n' else pred n'
 
     entities  <- members (Proxy :: Proxy HasLocation)
     dimRanges <- sequence
