@@ -102,7 +102,19 @@ instance Monoid SecsElapsed where
 withSecsElapsed :: (Int -> Int) -> SecsElapsed -> SecsElapsed
 withSecsElapsed f = SecsElapsed . f . unSecsElapsed
 
--- deleted?
+defComponent "Depth"
+  [("unDepth", mkType ''Int [])]
+  ''Global
+
+instance Semigroup Depth where
+  Depth x <> Depth y = Depth (x + y)
+instance Monoid Depth where
+  mempty = Depth 0
+
+withDepth :: (Int -> Int) -> Depth -> Depth
+withDepth f = Depth . f . unDepth
+
+-- deleted
 
 defComponent "Deleted" [] ''Map
 
@@ -156,6 +168,7 @@ makeWorld "World" [ ''Message
                   , ''InGameStage
                   , ''TurnsElapsed
                   , ''SecsElapsed
+                  , ''Depth
                   , ''Deleted
                   , ''CanMove
                   , ''HasHealth
@@ -237,8 +250,9 @@ fromLocation :: HasLocation -> (Int, Int)
 fromLocation (HasLocation x y) = (x, y)
 
 entityExistsAt :: Int -> Int -> RogueM Bool
-entityExistsAt x y =
-  cfold (\found comp -> found || fromLocation comp == (x, y)) False
+entityExistsAt x y = cfold
+  (\found (comp, Not :: Not Deleted) -> found || fromLocation comp == (x, y))
+  False
 
 findEntityAt :: Gettable c => Int -> Int -> Proxy c -> RogueM (Maybe Entity)
 findEntityAt x y (_ :: Proxy c) =
@@ -249,6 +263,9 @@ findEntityAt x y (_ :: Proxy c) =
           (\(entity, HasLocation x' y') ->
             if x == x' && y == y' then Just entity else Nothing
           )
+
+entityWithExistsAt :: Gettable c => Int -> Int -> Proxy c -> RogueM Bool
+entityWithExistsAt x y p = findEntityAt x y p <&> isJust
 
 wallExistsAt :: Int -> Int -> RogueM Bool
 wallExistsAt x y = cfold
@@ -284,15 +301,23 @@ mkEntityOnEmpty_ ss = do
     else mkEntity_ $ C (HasLocation x y) : ss
 
 
+-- difficulty
+-------------
+
+getDifficulty :: RogueM Double
+getDifficulty = get global <&> \(SecsElapsed secs, Depth depth) ->
+  (fromIntegral secs * (fromIntegral depth + 2)) ** 0.7 + 100
+
+
 -- comp gen
 -----------
 
 randomItemComponents :: RogueM [ComponentBox]
 randomItemComponents = do
   regenAmount <- lift $ getRandomR (3, 7)
-  component   <- lift
-    $ randomChoice (C IsFire : replicate 3 (C $ IsPotion regenAmount))
-  return [component]
+  difficulty  <- getDifficulty
+  randomIO <&> \n ->
+    if n > (difficulty / 200) then [C $ IsPotion regenAmount] else [C IsFire]
 
 
 -- commands
@@ -367,28 +392,36 @@ mkWalls = mkWalls' 25 where
         _ -> mkWalls' (n - 1)
       else mkWalls' (n - 1)
 
-populateWorld :: RogueM ()
-populateWorld = do
+populateWorld :: Maybe Entity -> RogueM ()
+populateWorld existingPlayer = do
   (staircase, player) <- populateWorld'
   HasLocation sx sy   <- get staircase
   HasLocation px py   <- get player
+
+  minPathLength       <- getDifficulty <&> round . (/ 20)
+  maxPathLength       <- getDifficulty <&> round . (/ 10)
+
   pathfind (px, py) (sx, sy) >>= \case
     Nothing   -> tryAgain
-    Just path -> unless (length path > 12) tryAgain
+    Just path -> unless
+      (length path > minPathLength && length path < maxPathLength)
+      tryAgain
  where
   populateWorld' = do
     mkWalls
     replicateM_ 5 $ mkEntityOnEmpty_ [C CanMove, C (HasHealth 3), C IsEvil]
-    replicateM_ 3 $ randomItemComponents >>= mkEntityOnEmpty_
+    replicateM_ 5 $ randomItemComponents >>= mkEntityOnEmpty_
     forM_ [C (IsPortal In), C (IsPortal Out)] $ mkEntityOnEmpty_ . (: [])
     staircase <- mkEntityOnEmpty [C IsStaircase]
-    player    <- mkEntityOnEmpty [C CanMove, C (HasHealth 10), C IsPlayer]
+    player    <- case existingPlayer of
+      Just player -> pure player
+      Nothing     -> mkEntityOnEmpty [C CanMove, C (HasHealth 10), C IsPlayer]
 
     pure (staircase, player)
 
   tryAgain = do
     cmapM_ $ \(HasLocation _ _, entity) -> set entity Deleted
-    populateWorld
+    populateWorld existingPlayer
 
 
 -- movement
@@ -550,6 +583,17 @@ takeFireDamage = def
                     name e >>= appendMessage . (<> " burns...")
   }
 
+descendStaircase :: System
+descendStaircase = def
+  { qualifier = [C (HasLocation pl pl), C IsPlayer]
+  , action    = \_ e -> get e >>= \(HasLocation x y) ->
+    whenM (entityWithExistsAt x y (Proxy :: Proxy IsStaircase)) $ do
+      modify global $ withDepth succ
+      cmapM_ $ \(HasLocation _ _, entity, Not :: Not IsPlayer) ->
+        set entity Deleted
+      populateWorld (Just e)
+  }
+
 systems :: [System]
 systems =
   [ -- rendering and naming
@@ -581,21 +625,18 @@ systems =
   , def
     { qualifier = [C (HasHealth pl)]
     , action    = \_ e -> get e >>= \(HasHealth x) -> when (x <= 0) $ do
-                    set e Deleted
-                    name e >>= appendMessage . (<> " has died!")
-                    whenM (exists e (Proxy :: Proxy IsPlayer)) $ do
-                      get global >>= \(SecsElapsed secs) -> appendMessage
-                        ("you survived for " <> show secs <> " seconds!")
-                      set global $ InGameStage GameOver
+      set e Deleted
+      name e >>= appendMessage . (<> " has died!")
+      whenM (exists e (Proxy :: Proxy IsPlayer)) $ do
+        get global >>= \(Depth n) ->
+          appendMessage ("you survived to depth " <> show n <> ".")
+        set global $ InGameStage GameOver
     }
     -- message
   , def
     { qualifier = [C (HasHealth pl), C IsPlayer]
-    , action    = \_ e ->
-                    get e
-                      >>= appendMessage
-                      .   (\n -> "you have " <> show n <> " hp")
-                      .   unHealth
+    , action    = \_ e -> get e >>= \(HasHealth hp, Depth d) -> appendMessage
+                    ("you have " <> show hp <> " hp (depth " <> show d <> ")")
     }
   , def
     { qualifier = [C IsPlayer]
@@ -606,6 +647,8 @@ systems =
                             ["placeholder msg 1", "placeholder msg 2"]
                       >>= appendMessage
     }
+  -- descension
+  , descendStaircase
   ]
 
 
@@ -621,7 +664,7 @@ displayIntro :: Command -> RogueM ()
 displayIntro _ = get global >>= \case
   (InGameStage Intro, TurnsElapsed 2) -> do
     appendMessage "you enter the dungeon..."
-    populateWorld
+    populateWorld Nothing
     set global $ InGameStage MainGame
   (InGameStage Intro, _) -> set global $ Message ["[intro message]"]
   _                      -> pure ()
