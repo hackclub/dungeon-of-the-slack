@@ -89,12 +89,13 @@ renderGrid es =
 
   isWallOrDoor' e = represent e <&> ((== WallTile) ||$ (== DoorTile))
   isWallOrDoor x' y' = maybe (pure False) isWallOrDoor' $ mget x' y' es
+  isSomething x' y' = pure . isJust $ mget x' y' es
   safeInc a = if a < matrixSize - 1 then a + 1 else a
   safeDec a = if a > 0 then a - 1 else a
   vertical (x, y) = do
     l <- sequence
-      [ isWallOrDoor x           (safeDec y)
-      , isWallOrDoor x           (safeInc y)
+      [ isSomething x (safeDec y)
+      , isSomething x (safeInc y)
       , isWallOrDoor (safeDec x) y
       , isWallOrDoor (safeInc x) y
       ]

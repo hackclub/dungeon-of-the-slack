@@ -727,7 +727,6 @@ compareEntities e1 e2 = do
     (_, _, _, _, False, True) -> pure LT
     _ -> pure EQ
 
-
 getGrid :: RogueM EntityGrid
 getGrid =
   (members (Proxy :: Proxy HasLocation) >>= mapM get) >>= foldlM go emptyMap
