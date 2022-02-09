@@ -114,10 +114,6 @@ instance Monoid Depth where
 withDepth :: (Int -> Int) -> Depth -> Depth
 withDepth f = Depth . f . unDepth
 
--- deleted
-
-defComponent "Deleted" [] ''Map
-
 -- abilities
 
 defComponent "CanMove" [] ''Map
@@ -164,23 +160,7 @@ defComponent "IsPlayer" [] ''Unique
 -- world
 --------
 
-makeWorld "World" [ ''Message
-                  , ''InGameStage
-                  , ''TurnsElapsed
-                  , ''SecsElapsed
-                  , ''Depth
-                  , ''Deleted
-                  , ''CanMove
-                  , ''HasHealth
-                  , ''HasLocation
-                  , ''IsDoor
-                  , ''IsWall
-                  , ''IsFire
-                  , ''IsPortal
-                  , ''IsPotion
-                  , ''IsStaircase
-                  , ''IsEvil
-                  , ''IsPlayer]
+makeWorld "World" componentNames
 
 -- TODO rename the other RogueM, whose name is less fitting
 type RandIOM = RandT StdGen IO
@@ -196,6 +176,9 @@ type Gettable a = (Get World RandIOM a, Get World RogueM a)
 type Settable a = Set World RandIOM a
 type Memberable a = (Members World RandIOM a, Members World RogueM a)
 data ComponentBox = forall a . (Gettable a, Settable a, Memberable a) => C a
+-- data ProxyBox = forall a . (Gettable a, Settable a, Memberable a) => P ( Proxy
+--                                                                            a
+--                                                                        )
 
 existsBoxed :: Entity -> ComponentBox -> RogueM Bool
 existsBoxed e (C (_ :: c)) = exists e (Proxy :: Proxy c)
@@ -227,6 +210,11 @@ members (_ :: Proxy c) = do
   (pure . map Entity . Vec.toList) memberVec
 
 
+-- deletion
+
+mkDelete localComponentNames
+
+
 -- map
 
 type EntityGrid = Matrix (Maybe Entity)
@@ -250,13 +238,12 @@ fromLocation :: HasLocation -> (Int, Int)
 fromLocation (HasLocation x y) = (x, y)
 
 entityExistsAt :: Int -> Int -> RogueM Bool
-entityExistsAt x y = cfold
-  (\found (comp, Not :: Not Deleted) -> found || fromLocation comp == (x, y))
-  False
+entityExistsAt x y =
+  cfold (\found comp -> found || fromLocation comp == (x, y)) False
 
 findEntityAt :: Gettable c => Int -> Int -> Proxy c -> RogueM (Maybe Entity)
 findEntityAt x y (_ :: Proxy c) =
-  members (Proxy :: Proxy (HasLocation, c, Not Deleted))
+  members (Proxy :: Proxy (HasLocation, c))
     >>= mapM get
     <&> listToMaybe
     .   mapMaybe
@@ -268,11 +255,8 @@ entityWithExistsAt :: Gettable c => Int -> Int -> Proxy c -> RogueM Bool
 entityWithExistsAt x y p = findEntityAt x y p <&> isJust
 
 wallExistsAt :: Int -> Int -> RogueM Bool
-wallExistsAt x y = cfold
-  (\found (comp, IsWall, Not :: Not Deleted) ->
-    found || fromLocation comp == (x, y)
-  )
-  False
+wallExistsAt x y =
+  cfold (\found (comp, IsWall) -> found || fromLocation comp == (x, y)) False
 
 randomCoord :: RogueM (Int, Int)
 randomCoord = do
@@ -317,7 +301,7 @@ randomItemComponents = do
   regenAmount <- lift $ getRandomR (3, 7)
   difficulty  <- getDifficulty
   randomIO <&> \n ->
-    if n > (difficulty / 200) then [C $ IsPotion regenAmount] else [C IsFire]
+    if n > (difficulty / 300) then [C $ IsPotion regenAmount] else [C IsFire]
 
 
 -- commands
@@ -345,10 +329,9 @@ mkWalls = mkWalls' 25 where
 
         adjEntityLocs :: RogueM [HasLocation]
         adjEntityLocs = cfold
-          (\ls (loc, Not :: Not Deleted) ->
-            if abs (pos2 loc - dim2) < 3 && pos1 loc - dim1 == 0
-              then loc : ls
-              else ls
+          (\ls loc -> if abs (pos2 loc - dim2) < 3 && pos1 loc - dim1 == 0
+            then loc : ls
+            else ls
           )
           []
 
@@ -369,7 +352,7 @@ mkWalls = mkWalls' 25 where
         safeInc n' = if n' == matrixSize - 1 then n' else succ n'
         safeDec n' = if n' == 0 then n' else pred n'
 
-    entities  <- members (Proxy :: Proxy (HasLocation, Not Deleted))
+    entities  <- members (Proxy :: Proxy HasLocation)
     dimRanges <- sequence
       [ constrainWalls isMin entities | isMin <- [True, False] ]
 
@@ -408,9 +391,14 @@ populateWorld existingPlayer = do
       tryAgain
  where
   populateWorld' = do
+    difficulty <- getDifficulty
+    enemyCount <- (+ floor (difficulty / 120)) <$> lift (getRandomR (1, 4))
+    itemCount  <- (+ floor (difficulty / 100)) <$> lift (getRandomR (1, 4))
+
     mkWalls
-    replicateM_ 5 $ mkEntityOnEmpty_ [C CanMove, C (HasHealth 3), C IsEvil]
-    replicateM_ 5 $ randomItemComponents >>= mkEntityOnEmpty_
+    replicateM_ enemyCount
+      $ mkEntityOnEmpty_ [C CanMove, C (HasHealth 3), C IsEvil]
+    replicateM_ itemCount $ randomItemComponents >>= mkEntityOnEmpty_
     forM_ [C (IsPortal In), C (IsPortal Out)] $ mkEntityOnEmpty_ . (: [])
     staircase <- mkEntityOnEmpty [C IsStaircase]
     player    <- case existingPlayer of
@@ -420,7 +408,7 @@ populateWorld existingPlayer = do
     pure (staircase, player)
 
   tryAgain = do
-    cmapM_ $ \(HasLocation _ _, entity) -> set entity Deleted
+    cmapM_ $ \(HasLocation _ _, Not :: Not IsPlayer, entity) -> delete entity
     populateWorld existingPlayer
 
 
@@ -549,7 +537,7 @@ drinkPotion = def
                       (pure ())
                       (\e' -> do
                         get e' >>= modify e . withHealth . (+) . unPotion
-                        set e' Deleted
+                        delete e'
                         appendMessage "you feel rejuvenated..."
                       )
                   _ -> pure ()
@@ -589,8 +577,7 @@ descendStaircase = def
   , action    = \_ e -> get e >>= \(HasLocation x y) ->
     whenM (entityWithExistsAt x y (Proxy :: Proxy IsStaircase)) $ do
       modify global $ withDepth succ
-      cmapM_ $ \(HasLocation _ _, entity, Not :: Not IsPlayer) ->
-        set entity Deleted
+      cmapM_ $ \(HasLocation _ _, entity, Not :: Not IsPlayer) -> delete entity
       populateWorld (Just e)
   }
 
@@ -625,12 +612,12 @@ systems =
   , def
     { qualifier = [C (HasHealth pl)]
     , action    = \_ e -> get e >>= \(HasHealth x) -> when (x <= 0) $ do
-      set e Deleted
       name e >>= appendMessage . (<> " has died!")
       whenM (exists e (Proxy :: Proxy IsPlayer)) $ do
         get global >>= \(Depth n) ->
           appendMessage ("you survived to depth " <> show n <> ".")
         set global $ InGameStage GameOver
+      delete e
     }
     -- message
   , def
@@ -722,31 +709,52 @@ name :: Entity -> RogueM Text
 name = build transName "something"
 
 
+compareEntities :: Entity -> Entity -> RogueM Ordering
+compareEntities e1 e2 = do
+  e1player    <- exists e1 (Proxy :: Proxy IsPlayer)
+  e2player    <- exists e2 (Proxy :: Proxy IsPlayer)
+  e1evil      <- exists e1 (Proxy :: Proxy IsEvil)
+  e2evil      <- exists e2 (Proxy :: Proxy IsEvil)
+  e1staircase <- exists e1 (Proxy :: Proxy IsStaircase)
+  e2staircase <- exists e2 (Proxy :: Proxy IsStaircase)
+
+  case (e1player, e2player, e1evil, e2evil, e1staircase, e2staircase) of
+    (True, False, _, _, _, _) -> pure GT
+    (False, True, _, _, _, _) -> pure LT
+    (_, _, True, False, _, _) -> pure GT
+    (_, _, False, True, _, _) -> pure LT
+    (_, _, _, _, True, False) -> pure GT
+    (_, _, _, _, False, True) -> pure LT
+    _ -> pure EQ
+
+
 getGrid :: RogueM EntityGrid
 getGrid =
-  (members (Proxy :: Proxy (HasLocation, Not Deleted)) >>= mapM get)
-    <&> foldl' go emptyMap
+  (members (Proxy :: Proxy HasLocation) >>= mapM get) >>= foldlM go emptyMap
  where
-  go grid (entity, entityLoc) =
-    mset (posX entityLoc) (posY entityLoc) (Just entity) grid
+  go grid (entity, entityLoc) = do
+    comparison <- case mget (posX entityLoc) (posY entityLoc) grid of
+      Just existingEntity -> compareEntities entity existingEntity
+      Nothing             -> pure GT
+    case comparison of
+      LT -> pure grid
+      _  -> pure $ mset (posX entityLoc) (posY entityLoc) (Just entity) grid
 
 executeStep :: Command -> RogueM ()
 executeStep command = do
   forM_ globalSystemsPre (\f -> f command)
+  SecsElapsed secs <- get global
+  let realTimeStep = secs >= 180 && secs `mod` 2 == 0
   forM_
     systems
-    (\s -> unless (forbidIncTimer s && command == IncrementTimer) $ do
-      members' <- mapM (\(C (_ :: c)) -> members (Proxy :: Proxy c))
-                       (qualifier s)
-      mapM_
-        (\e ->
-          whenM
-              (   qualified e (qualifier s)
-              &&^ exists e (Proxy :: Proxy (Not Deleted))
-              )
-            $ action s command e
-        )
-        (foldl' union [] members')
+    (\s ->
+      unless (forbidIncTimer s && command == IncrementTimer && not realTimeStep)
+        $ do
+            members' <- mapM (\(C (_ :: c)) -> members (Proxy :: Proxy c))
+                             (qualifier s)
+            mapM_
+              (\e -> whenM (qualified e (qualifier s)) $ action s command e)
+              (foldl' union [] members')
     )
   forM_ globalSystemsPost (\f -> f command)
 

@@ -23,6 +23,8 @@ dependencies:
   - template-haskell
   - unliftio
   - vector
+
+  - exceptions
 executable:
   main: Main.hs
   source-dirs: src

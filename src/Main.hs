@@ -152,7 +152,7 @@ app = do
   let gameLoop = do
         (timestamp', command ) <- liftIO $ readChan channel
         (_         , gameOver) <- stepAndSend timestamp' command
-        unless gameOver $ gameLoop
+        unless gameOver gameLoop
   gameLoop
 
 main :: IO ()

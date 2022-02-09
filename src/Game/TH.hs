@@ -5,9 +5,12 @@
 -- legally this has to be in a different module
 
 module Game.TH
-    ( defComponent
-    , mkType
-    ) where
+  ( defComponent
+  , mkType
+  , localComponentNames
+  , componentNames
+  , mkDelete
+  ) where
 
 import           Apecs
 import           Relude                  hiding ( Type )
@@ -33,6 +36,44 @@ defComponent name args storage = do
         noBang = map (\(n, t) -> (mkName' n, Bang NoSourceUnpackedness NoSourceStrictness, t))
 
 mkType :: Name -> [Name] -> Type
-mkType = mkType' . ConT  where
-    mkType' type' []       = type'
-    mkType' type' (a : as) = mkType' (AppT type' $ ConT a) as
+mkType = mkType' . ConT where
+  mkType' type' []       = type'
+  mkType' type' (a : as) = mkType' (AppT type' $ ConT a) as
+
+
+localComponentNames :: [Name]
+localComponentNames =
+  [ mkName "CanMove"
+  , mkName "HasHealth"
+  , mkName "HasLocation"
+  , mkName "IsDoor"
+  , mkName "IsWall"
+  , mkName "IsFire"
+  , mkName "IsPortal"
+  , mkName "IsPotion"
+  , mkName "IsStaircase"
+  , mkName "IsEvil"
+  , mkName "IsPlayer"
+  ]
+
+componentNames :: [Name]
+componentNames =
+  [ mkName "Message"
+    , mkName "InGameStage"
+    , mkName "TurnsElapsed"
+    , mkName "SecsElapsed"
+    , mkName "Depth"
+    ]
+    <> localComponentNames
+
+mkDelete :: [Name] -> Q [Dec]
+mkDelete compNames = (: []) <$> do
+  let comps = map conT compNames
+      stmts = map (\c -> noBindS
+                    [e|
+                      whenM (exists entity (Proxy :: Proxy $c)) $
+                        destroy entity (Proxy :: Proxy $c)
+                    |]
+                  ) comps
+  funD (mkName "delete")
+       [clause [varP $ mkName "entity"] (normalB $ doE stmts) []]
