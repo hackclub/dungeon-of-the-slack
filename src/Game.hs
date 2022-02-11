@@ -49,7 +49,11 @@ import           Data.Graph.AStar
 import           Data.List                      ( (!!)
                                                 , union
                                                 )
-import           Data.Time                      ( UTCTime )
+import           Data.Time                      ( UTCTime
+                                                , diffUTCTime
+                                                , getCurrentTime
+                                                , secondsToNominalDiffTime
+                                                )
 import qualified Data.Vector.Fixed             as FVec
 import qualified Data.Vector.Unboxed           as Vec
 
@@ -699,7 +703,18 @@ globalSystemsPre = [clearMessage, displayIntro, incrementTurns]
 displayLeaderboard :: Command -> RogueM ()
 displayLeaderboard = \case
   DisplayLeaderboard (Leaderboard entries) -> do
-    appendMessage $ "leaderboard:\n" <> unlines (map displayEntry entries)
+    currentTime <- liftIO getCurrentTime
+    let oneWeek = secondsToNominalDiffTime 604800
+    appendMessage
+      $  "leaderboard:\n"
+      <> ( unlines
+         . map displayEntry
+         . take 10
+         . reverse
+         . sortOn (\e -> (leDepth e, leSecs e))
+         . filter ((< oneWeek) . diffUTCTime currentTime . leTime)
+         )
+           entries
   _ -> pure ()
  where
   displayEntry LeaderboardEntry {..} =
