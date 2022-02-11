@@ -1,8 +1,9 @@
 {-# LANGUAGE DeriveGeneric       #-}
+{-# LANGUAGE LambdaCase          #-}
 {-# LANGUAGE NoImplicitPrelude   #-}
 {-# LANGUAGE OverloadedStrings   #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE StrictData          #-}
 
 module Slack
   ( wsConnect
@@ -13,6 +14,7 @@ module Slack
   , sendMessage
   , editMessage
   , reactToMessage
+  , getUserName
   ) where
 
 import           Relude                  hiding ( get
@@ -272,3 +274,32 @@ reactToMessage session token channelId timestamp' emoji = void $ S.post
   , "timestamp" := timestamp'
   , "name" := emoji
   ]
+
+
+newtype UserInfo = UserInfo
+  { userDisplayName :: Text }
+  deriving Show
+
+instance FromJSON UserInfo where
+  parseJSON =
+    withObject "UserInfo"
+      $   (.: "user")
+      >=> (.: "profile")
+      >=> (.: "display_name")
+      >=> return
+      .   UserInfo
+
+getUserName :: Session -> Text -> Text -> IO Text
+getUserName session token userId = do
+  res <- S.getWith
+    (  defaults
+    &  header "Authorization"
+    .~ ["Bearer " <> encodeUtf8 token]
+    &  param "user"
+    .~ [userId]
+    )
+    session
+    "https://slack.com/api/users.info"
+  case eitherDecode (res ^. responseBody) of
+    Left  e -> die $ e <> "\n" <> (decodeUtf8 . view responseBody) res
+    Right u -> pure . userDisplayName $ u

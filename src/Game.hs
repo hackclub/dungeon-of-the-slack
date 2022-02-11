@@ -6,22 +6,28 @@
 {-# LANGUAGE MultiParamTypeClasses     #-}
 {-# LANGUAGE NoImplicitPrelude         #-}
 {-# LANGUAGE OverloadedStrings         #-}
+{-# LANGUAGE RecordWildCards           #-}
 {-# LANGUAGE ScopedTypeVariables       #-}
 {-# LANGUAGE StandaloneDeriving        #-}
+{-# LANGUAGE StrictData                #-}
 {-# LANGUAGE TemplateHaskell           #-}
 {-# LANGUAGE TypeFamilies              #-}
 
 module Game
   ( RogueM
   , EntityGrid
+  , Leaderboard(..)
+  , LeaderboardEntry(..)
+  , withLeaderboard
   , Command(..)
   , Message(..)
   , Tile(..)
+  , Portal(..)
   , represent
   , populateWorld
+  , getLeaderboardInfo
   , step
   , runRogue
-  , Portal(..)
   ) where
 
 import           Apecs                   hiding ( System )
@@ -43,6 +49,7 @@ import           Data.Graph.AStar
 import           Data.List                      ( (!!)
                                                 , union
                                                 )
+import           Data.Time                      ( UTCTime )
 import qualified Data.Vector.Fixed             as FVec
 import qualified Data.Vector.Unboxed           as Vec
 
@@ -176,16 +183,12 @@ type Gettable a = (Get World RandIOM a, Get World RogueM a)
 type Settable a = Set World RandIOM a
 type Memberable a = (Members World RandIOM a, Members World RogueM a)
 data ComponentBox = forall a . (Gettable a, Settable a, Memberable a) => C a
--- data ProxyBox = forall a . (Gettable a, Settable a, Memberable a) => P ( Proxy
---                                                                            a
---                                                                        )
+data ProxyBox = forall a . (Gettable a, Settable a, Memberable a) => P ( Proxy
+                                                                           a
+                                                                       )
 
-existsBoxed :: Entity -> ComponentBox -> RogueM Bool
-existsBoxed e (C (_ :: c)) = exists e (Proxy :: Proxy c)
-
--- TODO proxy might serve this purpose better
-pl :: a
-pl = error "This is a placeholder; it shouldn't have been evaluated!"
+existsBoxed :: Entity -> ProxyBox -> RogueM Bool
+existsBoxed e (P (_ :: Proxy c)) = exists e (Proxy :: Proxy c)
 
 
 setBoxed :: Entity -> ComponentBox -> RogueM ()
@@ -307,9 +310,31 @@ randomItemComponents = do
 -- commands
 -----------
 
+newtype Leaderboard = Leaderboard
+  { unLeaderboard :: [LeaderboardEntry]
+  } deriving Eq
+
+data LeaderboardEntry = LeaderboardEntry
+  { leName  :: Text
+  , leTime  :: UTCTime
+  , leDepth :: Int
+  , leSecs  :: Int
+  }
+  deriving Eq
+
+withLeaderboard
+  :: ([LeaderboardEntry] -> [LeaderboardEntry]) -> Leaderboard -> Leaderboard
+withLeaderboard f (Leaderboard entries) = Leaderboard (f entries)
+
 -- `IncrementTimer` is not really a command, 
 -- but indicates that most systems shouldn't run
-data Command = IncrementTimer | Noop | Move (Int, Int) | Drink deriving Eq
+data Command = IncrementTimer
+             | DisplayLeaderboard Leaderboard
+             | Noop
+             | Move (Int, Int)
+             | Drink
+             | Die
+             deriving Eq
 
 
 -- initialization
@@ -338,10 +363,11 @@ mkWalls = mkWalls' 25 where
         constrainWalls isMin =
           (\case
               [] -> pure $ if isMin then Just 0 else Just (matrixSize - 1)
-              (e, loc) : _ -> existsBoxed e (C IsDoor) >>= \isDoor ->
-                pure $ if isDoor
-                  then Nothing
-                  else (Just . (if isMin then safeInc else safeDec) . pos1) loc
+              (e, loc) : _ ->
+                existsBoxed e (P (Proxy :: Proxy IsDoor)) >>= \isDoor ->
+                  pure $ if isDoor
+                    then Nothing
+                    else (Just . (if isMin then safeInc else safeDec) . pos1) loc
             )
             .   (if isMin then reverse else id)
             .   sortOn (pos1 . snd)
@@ -487,7 +513,7 @@ data Tile = WallTile
 ----------
 
 data System = System
-  { qualifier      :: [ComponentBox]
+  { qualifier      :: [ProxyBox]
   , action         :: Command -> Entity -> RogueM ()
   , transRepr      :: Entity -> Tile -> RogueM Tile
   , transName      :: Entity -> Text -> RogueM Text
@@ -502,11 +528,11 @@ instance Default System where
                , forbidIncTimer = True
                }
 
-qualified :: Entity -> [ComponentBox] -> RogueM Bool
+qualified :: Entity -> [ProxyBox] -> RogueM Bool
 qualified = allM . existsBoxed
 
 
-trivialRender :: ComponentBox -> Tile -> Text -> System
+trivialRender :: ProxyBox -> Tile -> Text -> System
 trivialRender comp tile name' = def { qualifier = [comp]
                                     , transRepr = \_ _ -> pure tile
                                     , transName = \_ _ -> pure name'
@@ -514,7 +540,7 @@ trivialRender comp tile name' = def { qualifier = [comp]
 
 moveEvil :: System
 moveEvil = def
-  { qualifier = [C (HasLocation pl pl), C CanMove, C IsEvil]
+  { qualifier = [$(pb "HasLocation"), $(pb "CanMove"), $(pb "IsEvil")]
   , action    = \_ e -> do
                   HasLocation evilX evilY <- get e
                   playerLoc <- cfold (\_ (loc, IsPlayer) -> Just loc) Nothing
@@ -530,7 +556,7 @@ moveEvil = def
 -- TODO perhaps generalize?
 drinkPotion :: System
 drinkPotion = def
-  { qualifier = [C IsPlayer]
+  { qualifier = [$(pb "IsPlayer")]
   , action    = \c e -> case c of
                   Drink -> get e >>= \(HasLocation x y) ->
                     findEntityAt x y (Proxy :: Proxy IsPotion) >>= maybe
@@ -545,7 +571,7 @@ drinkPotion = def
 
 spreadFire :: System
 spreadFire = def
-  { qualifier = [C IsFire]
+  { qualifier = [$(pb "IsFire")]
   , action    = \_ e -> do
     neighbors <- get e >>= getNeighborsPortal . fromLocation
     forM_ neighbors $ \(x, y) -> do
@@ -558,7 +584,7 @@ spreadFire = def
 
 takeFireDamage :: System
 takeFireDamage = def
-  { qualifier = [C (HasHealth pl)]
+  { qualifier = [$(pb "HasHealth")]
   , action    = \_ e -> do
                   HasLocation x y <- get e
                   onFire          <- cfold
@@ -573,7 +599,7 @@ takeFireDamage = def
 
 descendStaircase :: System
 descendStaircase = def
-  { qualifier = [C (HasLocation pl pl), C IsPlayer]
+  { qualifier = [$(pb "HasLocation"), $(pb "IsPlayer")]
   , action    = \_ e -> get e >>= \(HasLocation x y) ->
     whenM (entityWithExistsAt x y (Proxy :: Proxy IsStaircase)) $ do
       modify global $ withDepth succ
@@ -584,20 +610,26 @@ descendStaircase = def
 systems :: [System]
 systems =
   [ -- rendering and naming
-    trivialRender (C IsWall)        WallTile   "a wall"
-  , trivialRender (C IsDoor)        DoorTile   "a door"
-  , trivialRender (C IsEvil)        EvilTile   "a rat"
-  , trivialRender (C IsFire)        FireTile   "fire"
-  , trivialRender (C $ IsPotion pl) PotionTile "a potion"
-  , def { qualifier = [C (IsPortal pl)]
+    trivialRender $(pb "IsWall")   WallTile   "a wall"
+  , trivialRender $(pb "IsDoor")   DoorTile   "a door"
+  , trivialRender $(pb "IsEvil")   EvilTile   "a rat"
+  , trivialRender $(pb "IsFire")   FireTile   "fire"
+  , trivialRender $(pb "IsPotion") PotionTile "a potion"
+  , def { qualifier = [$(pb "IsPortal")]
         , transRepr = \e _ -> get e <&> PortalTile . portalType
         , transName = \_ _ -> pure "a portal"
         }
-  , trivialRender (C IsStaircase) StaircaseTile "a staircase"
-  , trivialRender (C IsPlayer)    PlayerTile    "the player"
+  , trivialRender $(pb "IsStaircase") StaircaseTile "a staircase"
+  , trivialRender $(pb "IsPlayer")    PlayerTile    "the player"
     -- active
   , def
-    { qualifier = [C (HasLocation pl pl), C CanMove, C IsPlayer]
+    { qualifier = [$(pb "HasHealth"), $(pb "IsPlayer")]
+    , action    = \c e -> case c of
+                    Die -> set e $ HasHealth 0
+                    _   -> pure ()
+    }
+  , def
+    { qualifier = [$(pb "HasLocation"), $(pb "CanMove"), $(pb "IsPlayer")]
     , action    = \c e -> case c of
                     Move (x, y) -> do
                       HasLocation x' y' <- get e
@@ -610,7 +642,7 @@ systems =
   , spreadFire
   , takeFireDamage
   , def
-    { qualifier = [C (HasHealth pl)]
+    { qualifier = [$(pb "HasHealth")]
     , action    = \_ e -> get e >>= \(HasHealth x) -> when (x <= 0) $ do
       name e >>= appendMessage . (<> " has died!")
       whenM (exists e (Proxy :: Proxy IsPlayer)) $ do
@@ -621,12 +653,12 @@ systems =
     }
     -- message
   , def
-    { qualifier = [C (HasHealth pl), C IsPlayer]
+    { qualifier = [$(pb "HasHealth"), $(pb "IsPlayer")]
     , action    = \_ e -> get e >>= \(HasHealth hp, Depth d) -> appendMessage
                     ("you have " <> show hp <> " hp (depth " <> show d <> ")")
     }
   , def
-    { qualifier = [C IsPlayer]
+    { qualifier = [$(pb "IsPlayer")]
     , action    = \_ _ -> do
                     addRandomMessage <- (< (0.1 :: Double)) <$> lift getRandom
                     when addRandomMessage
@@ -664,6 +696,15 @@ globalSystemsPre :: [Command -> RogueM ()]
 globalSystemsPre = [clearMessage, displayIntro, incrementTurns]
 
 
+displayLeaderboard :: Command -> RogueM ()
+displayLeaderboard = \case
+  DisplayLeaderboard (Leaderboard entries) -> do
+    appendMessage $ "leaderboard:\n" <> unlines (map displayEntry entries)
+  _ -> pure ()
+ where
+  displayEntry LeaderboardEntry {..} =
+    leName <> ": depth " <> show leDepth <> ", " <> show leSecs <> " secs"
+
 incrementSecs :: Command -> RogueM ()
 incrementSecs = \case
   IncrementTimer -> get global >>= \case
@@ -686,7 +727,8 @@ reverseMessage command = case command of
   _              -> modify global $ withMessage reverse
 
 globalSystemsPost :: [Command -> RogueM ()]
-globalSystemsPost = [reverseMessage, incrementSecs, displaySecs]
+globalSystemsPost =
+  [displayLeaderboard, reverseMessage, incrementSecs, displaySecs]
 
 
 -- run
@@ -743,19 +785,24 @@ executeStep :: Command -> RogueM ()
 executeStep command = do
   forM_ globalSystemsPre (\f -> f command)
   SecsElapsed secs <- get global
-  let realTimeStep = secs >= 180 && secs `mod` 2 == 0
+  let realTimeStep = secs >= 180 && even secs
   forM_
     systems
     (\s ->
       unless (forbidIncTimer s && command == IncrementTimer && not realTimeStep)
         $ do
-            members' <- mapM (\(C (_ :: c)) -> members (Proxy :: Proxy c))
+            members' <- mapM (\(P (_ :: p)) -> members (Proxy :: p))
                              (qualifier s)
             mapM_
               (\e -> whenM (qualified e (qualifier s)) $ action s command e)
               (foldl' union [] members')
     )
   forM_ globalSystemsPost (\f -> f command)
+
+getLeaderboardInfo :: RogueM (Int, Int)
+getLeaderboardInfo = do
+  (Depth depth, SecsElapsed secs) <- get global
+  pure (depth, secs)
 
 step
   :: Command

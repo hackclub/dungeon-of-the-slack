@@ -20,7 +20,7 @@ executable rogue
       Paths_rogue
   hs-source-dirs:
       src
-  ghc-options: -O2 -Wall
+  ghc-options: -O2 -Wall -fno-warn-orphans
   build-depends:
       MonadRandom
     , aeson
@@ -31,13 +31,14 @@ executable rogue
     , base64
     , containers
     , data-default
-    , exceptions
+    , directory
     , fixed-vector
     , lens
     , megaparsec
     , relude
     , split
     , template-haskell
+    , time
     , unliftio
     , vector
     , websockets

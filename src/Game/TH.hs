@@ -10,6 +10,7 @@ module Game.TH
   , localComponentNames
   , componentNames
   , mkDelete
+  , pb
   ) where
 
 import           Apecs
@@ -77,3 +78,9 @@ mkDelete compNames = (: []) <$> do
                   ) comps
   funD (mkName "delete")
        [clause [varP $ mkName "entity"] (normalB $ doE stmts) []]
+
+
+pb :: String -> Q Exp
+pb name = appE (conE $ mkName "P") $ sigE
+  (conE $ mkName "Proxy")
+  (appT (conT $ mkName "Proxy") (conT $ mkName name))

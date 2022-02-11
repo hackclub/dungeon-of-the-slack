@@ -1,6 +1,8 @@
-{-# LANGUAGE LambdaCase        #-}
-{-# LANGUAGE NoImplicitPrelude #-}
-{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE DeriveGeneric      #-}
+{-# LANGUAGE LambdaCase         #-}
+{-# LANGUAGE NoImplicitPrelude  #-}
+{-# LANGUAGE OverloadedStrings  #-}
+{-# LANGUAGE StandaloneDeriving #-}
 
 module Main
   ( main
@@ -12,25 +14,45 @@ import           Game
 import           Slack
 import           Utils
 
+import           Data.Aeson                     ( FromJSON
+                                                , ToJSON
+                                                , decodeStrict
+                                                , encodeFile
+                                                )
+import           System.Directory               ( doesFileExist )
+
+import           Network.Wreq.Session           ( Session )
+import qualified Network.Wreq.Session          as S
+
+import           UnliftIO.Async
+import           UnliftIO.Concurrent            ( threadDelay )
+
 import           Control.Concurrent.Chan
 import           Data.List.Split                ( chunksOf )
 import           Data.Maybe                     ( fromJust )
-import           Network.Wreq.Session           ( Session )
-import qualified Network.Wreq.Session          as S
+import           Data.Time                      ( getCurrentTime )
 import           System.Environment             ( lookupEnv )
-import           UnliftIO.Concurrent            ( forkIO
-                                                , threadDelay
-                                                )
 
 
 data Context = Context
-  { ctxSession   :: Session
-  , ctxAPIToken  :: Text
-  , ctxWSToken   :: Text
-  , ctxChannelID :: Text
+  { ctxSession         :: Session
+  , ctxAPIToken        :: Text
+  , ctxWSToken         :: Text
+  , ctxChannelID       :: Text
+  , ctxLeaderboardFile :: Text
   }
 
 type AppM = ReaderT Context RogueM
+
+
+deriving instance Generic LeaderboardEntry
+deriving instance Generic Leaderboard
+
+instance FromJSON LeaderboardEntry
+instance ToJSON LeaderboardEntry
+
+instance FromJSON Leaderboard
+instance ToJSON Leaderboard
 
 
 -- user id hardcoded for convenience. sorry!
@@ -41,7 +63,7 @@ addReacts :: Text -> AppM ()
 addReacts timestamp = do
   Context { ctxSession = session, ctxAPIToken = token, ctxChannelID = channelID } <-
     ask
-  void . liftIO . forkIO $ mapM_
+  void . liftIO . async $ mapM_
     (reactToMessage session token channelID timestamp)
     [ "tw_hourglass"
     , "tw_arrow_up"
@@ -49,6 +71,7 @@ addReacts timestamp = do
     , "tw_arrow_down"
     , "tw_arrow_left"
     , "tw_tea"
+    , "tw_skull"
     ]
 
 fromReact :: Text -> Command
@@ -59,6 +82,7 @@ fromReact = \case
   "tw_arrow_down"  -> Move (0, 1)
   "tw_arrow_left"  -> Move (-1, 0)
   "tw_tea"         -> Drink
+  "tw_skull"       -> Die
   _                -> Noop
 
 renderGrid :: EntityGrid -> RogueM Text
@@ -118,59 +142,96 @@ stepAndSend edit cmd = do
       addReacts timestamp
       return (timestamp, gameOver)
     Just timestamp -> do
-      void . liftIO . forkIO $ editMessage session
-                                           token
-                                           channelID
-                                           timestamp
-                                           text
+      void . liftIO . async $ editMessage session token channelID timestamp text
 
       return (timestamp, gameOver)
 
-handleMsg :: Text -> Chan (Maybe Text, Command) -> EventHandler IO
-handleMsg timestamp channel msg = do
+handleMsg
+  :: Text -> Chan (Text, Command) -> IORef (Maybe Text) -> EventHandler IO
+handleMsg timestamp channel userRef msg = do
   putStrLn $ "Message from socket: " <> show msg
   case msg of
     ReactionAdd e u -> do
-      unless (u == rogueUserId)
-        $ writeChan channel (Just timestamp, fromReact e)
+      unless (u == rogueUserId) $ do
+        writeChan channel (timestamp, fromReact e)
+        liftIO $ writeIORef userRef (Just u)
       return BasicRes
 
     _ -> do
       putStrLn $ "Can't handle event: " <> show msg
       return NoRes
 
-app :: AppM ()
-app = do
+app :: Chan (Text, Command) -> IORef (Maybe Text) -> AppM ()
+app channel userRef = do
   context        <- ask
-  (timestamp, _) <- stepAndSend Nothing Noop
-  channel        <- liftIO newChan
-  void . liftIO . forkIO $ wsConnect (ctxSession context)
-                                     (ctxWSToken context)
-                                     (handleMsg timestamp channel)
-  void . liftIO . forkIO . forever $ do
+  (timestamp, _) <- do
+    stepAndSend Nothing Noop
+  msgThread <- liftIO . async $ wsConnect
+    (ctxSession context)
+    (ctxWSToken context)
+    (handleMsg timestamp channel userRef)
+  timerThread <- liftIO . async . forever $ do
     threadDelay 1000000
-    writeChan channel (Just timestamp, IncrementTimer)
-  let gameLoop = do
-        (timestamp', command ) <- liftIO $ readChan channel
-        (_         , gameOver) <- stepAndSend timestamp' command
-        unless gameOver gameLoop
+    writeChan channel (timestamp, IncrementTimer)
+  let
+    gameLoop = do
+      (timestamp', command ) <- liftIO $ readChan channel
+      (_         , gameOver) <- stepAndSend (Just timestamp') command
+      if gameOver
+        then do
+          let leaderboardPath = toString $ ctxLeaderboardFile context
+          leaderboard <- liftIO $ doesFileExist leaderboardPath >>= \case
+            True ->
+              readFileBS leaderboardPath
+                >>= maybe (die "Failed to read leaderboard file") pure
+                .   decodeStrict
+            False -> pure $ Leaderboard []
+          void $ stepAndSend (Just timestamp') (DisplayLeaderboard leaderboard)
+
+          (depth, secs) <- lift getLeaderboardInfo
+          currentTime   <- liftIO getCurrentTime
+          userName      <- liftIO $ readIORef userRef >>= maybe
+            (pure "???")
+            (getUserName (ctxSession context) (ctxAPIToken context))
+          let newLeaderboard = withLeaderboard
+                (<> [ LeaderboardEntry { leName  = userName
+                                       , leTime  = currentTime
+                                       , leDepth = depth
+                                       , leSecs  = secs
+                                       }
+                    ]
+                )
+                leaderboard
+          liftIO $ encodeFile leaderboardPath newLeaderboard
+
+          cancel msgThread
+          cancel timerThread
+        else gameLoop
   gameLoop
 
 main :: IO ()
 main = do
-  let envVarNames = ["SLACK_API_TOKEN", "SLACK_WS_TOKEN", "RL_CHANNEL_NAME"]
+  let envVarNames =
+        [ "SLACK_API_TOKEN"
+        , "SLACK_WS_TOKEN"
+        , "RL_CHANNEL_NAME"
+        , "LEADERBOARD_FILE"
+        ]
   envVars <- mapM lookupEnv envVarNames
 
   case map (fmap fromString) envVars of
-    [Just at, Just wst, Just cn] -> do
+    [Just at, Just wst, Just cn, Just lf] -> do
       session   <- S.newSession
       channelID <- getChannelID session at cn
-      let context = Context { ctxSession   = session
-                            , ctxAPIToken  = at
-                            , ctxWSToken   = wst
-                            , ctxChannelID = channelID
+      let context = Context { ctxSession         = session
+                            , ctxAPIToken        = at
+                            , ctxWSToken         = wst
+                            , ctxChannelID       = channelID
+                            , ctxLeaderboardFile = lf
                             }
-      forever $ runRogue (runReaderT app context)
+      channel    <- newChan
+      latestUser <- newIORef Nothing
+      forever $ runRogue (runReaderT (app channel latestUser) context)
 
     _ ->
       void
