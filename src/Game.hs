@@ -661,15 +661,15 @@ systems =
     , action    = \_ e -> get e >>= \(HasHealth hp, Depth d) -> appendMessage
                     ("you have " <> show hp <> " hp (depth " <> show d <> ")")
     }
-  , def
-    { qualifier = [$(pb "IsPlayer")]
-    , action    = \_ _ -> do
-                    addRandomMessage <- (< (0.1 :: Double)) <$> lift getRandom
-                    when addRandomMessage
-                      $   (lift . randomChoice)
-                            ["placeholder msg 1", "placeholder msg 2"]
-                      >>= appendMessage
-    }
+  -- , def
+  --   { qualifier = [$(pb "IsPlayer")]
+  --   , action    = \_ _ -> do
+  --                   addRandomMessage <- (< (0.1 :: Double)) <$> lift getRandom
+  --                   when addRandomMessage
+  --                     $   (lift . randomChoice)
+  --                           ["placeholder msg 1", "placeholder msg 2"]
+  --                     >>= appendMessage
+  --   }
   -- descension
   , descendStaircase
   ]
@@ -689,8 +689,17 @@ displayIntro _ = get global >>= \case
     appendMessage "you enter the dungeon..."
     populateWorld Nothing
     set global $ InGameStage MainGame
-  (InGameStage Intro, _) -> set global $ Message ["[intro message]"]
+  (InGameStage Intro, _) -> set global $ Message [introMessage]
   _                      -> pure ()
+ where
+  introMessage
+    = "welcome to [placeholder name]\n\n\
+      \react with :tw_arrow_up::tw_arrow_right::tw_arrow_down::tw_arrow_left: to move\n\
+      \react with :tw_hourglass: to wait\n\
+      \react with :tw_tea: to drink a potion\n\
+      \react with :tw_skull: to die instantly\n\n\
+      \move quickly; you will find that the dungeon becomes less forgiving as time progresses\n\
+      \the dungeon can't be _that_ deep, can it?\n"
 
 incrementTurns :: Command -> RogueM ()
 incrementTurns command =
@@ -710,8 +719,7 @@ displayLeaderboard = \case
       <> ( unlines
          . map displayEntry
          . take 10
-         . reverse
-         . sortOn (\e -> (leDepth e, leSecs e))
+         . sortOn (\e -> Down (leDepth e, leSecs e))
          . filter ((< oneWeek) . diffUTCTime currentTime . leTime)
          )
            entries

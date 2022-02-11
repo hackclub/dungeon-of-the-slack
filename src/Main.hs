@@ -191,7 +191,7 @@ app channel userRef = do
           (depth, secs) <- lift getLeaderboardInfo
           currentTime   <- liftIO getCurrentTime
           userName      <- liftIO $ readIORef userRef >>= maybe
-            (pure "???")
+            (pure "a ghost?")
             (getUserName (ctxSession context) (ctxAPIToken context))
           let newLeaderboard = withLeaderboard
                 (<> [ LeaderboardEntry { leName  = userName
