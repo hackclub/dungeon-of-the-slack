@@ -351,36 +351,39 @@ mkWalls = mkWalls' 25 where
   mkWalls' n = do
     (x, y) <- randomCoordNoEdge
 
-    let pos1 = if even n then posX else posY
-        dim1 = if even n then x else y
-        pos2 = if even n then posY else posX
-        dim2 = if even n then y else x
+    let
+      pos1 = if even n then posX else posY
+      dim1 = if even n then x else y
+      pos2 = if even n then posY else posX
+      dim2 = if even n then y else x
 
-        adjEntityLocs :: RogueM [HasLocation]
-        adjEntityLocs = cfold
-          (\ls loc -> if abs (pos2 loc - dim2) < 3 && pos1 loc - dim1 == 0
-            then loc : ls
-            else ls
+      adjEntityLocs :: RogueM [HasLocation]
+      adjEntityLocs = cfold
+        (\ls loc -> if abs (pos2 loc - dim2) < 3 && pos1 loc - dim1 == 0
+          then loc : ls
+          else ls
+        )
+        []
+
+      constrainWalls isMin =
+        (\case
+            [] -> pure $ if isMin then Just 0 else Just (matrixSize - 1)
+            (e, loc) : _ ->
+              existsBoxed e (P (Proxy :: Proxy IsDoor))
+                ||^ existsBoxed e (P (Proxy :: Proxy IsPlayer))
+                >>= \blocked -> pure $ if blocked
+                      then Nothing
+                      else (Just . (if isMin then safeInc else safeDec) . pos1)
+                        loc
           )
-          []
+          .   (if isMin then reverse else id)
+          .   sortOn (pos1 . snd)
+          .   filter ((if isMin then (>=) else (<=)) dim1 . pos1 . snd)
+          .   filter ((== dim2) . pos2 . snd)
+          <=< mapM get
 
-        constrainWalls isMin =
-          (\case
-              [] -> pure $ if isMin then Just 0 else Just (matrixSize - 1)
-              (e, loc) : _ ->
-                existsBoxed e (P (Proxy :: Proxy IsDoor)) >>= \isDoor ->
-                  pure $ if isDoor
-                    then Nothing
-                    else (Just . (if isMin then safeInc else safeDec) . pos1) loc
-            )
-            .   (if isMin then reverse else id)
-            .   sortOn (pos1 . snd)
-            .   filter ((if isMin then (>=) else (<=)) dim1 . pos1 . snd)
-            .   filter ((== dim2) . pos2 . snd)
-            <=< mapM get
-
-        safeInc n' = if n' == matrixSize - 1 then n' else succ n'
-        safeDec n' = if n' == 0 then n' else pred n'
+      safeInc n' = if n' == matrixSize - 1 then n' else succ n'
+      safeDec n' = if n' == 0 then n' else pred n'
 
     entities  <- members (Proxy :: Proxy HasLocation)
     dimRanges <- sequence
@@ -698,8 +701,7 @@ displayIntro _ = get global >>= \case
       \react with :tw_hourglass: to wait\n\
       \react with :tw_tea: to drink a potion\n\
       \react with :tw_skull: to die instantly\n\n\
-      \move quickly; you will find that the dungeon becomes less forgiving as time progresses\n\
-      \the dungeon can't be _that_ deep, can it?\n"
+      \move quickly; you will find that the dungeon becomes less forgiving as time progresses"
 
 incrementTurns :: Command -> RogueM ()
 incrementTurns command =
@@ -774,6 +776,7 @@ name :: Entity -> RogueM Text
 name = build transName "something"
 
 
+-- lmfao
 compareEntities :: Entity -> Entity -> RogueM Ordering
 compareEntities e1 e2 = do
   e1player    <- exists e1 (Proxy :: Proxy IsPlayer)
