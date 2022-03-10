@@ -129,13 +129,15 @@ renderGrid es =
     let [a, b, c, d] = l
     return $ a && b && not (c && d)
 
-stepAndSend :: Maybe Text -> Command -> GameM (Text, Bool)
-stepAndSend edit cmd = do
+stepAndSend :: Maybe Text -> Text -> Command -> GameM (Text, Bool)
+stepAndSend edit user cmd = do
   Context { ctxSession = session, ctxAPIToken = token, ctxChannelID = channelID } <-
     ask
 
-  (renderedGrid, message, gameOver) <- lift
-    $ step cmd renderGrid (pure . unlines . unMessage)
+  (renderedGrid, message, gameOver) <- lift $ step
+    cmd
+    renderGrid
+    (pure . (("(<@" <> user <> ">'s game)\n\n") <>) . unlines . unMessage)
   let text = message <> "\n" <> renderedGrid
 
   case edit of
@@ -185,8 +187,8 @@ getLeaderboard (toString -> path) = doesFileExist path >>= \case
   False -> pure (Leaderboard [])
 
 
-initializeGame :: GameM Text
-initializeGame = stepAndSend Nothing Noop <&> fst
+initializeGame :: Text -> GameM Text
+initializeGame user = stepAndSend Nothing user Noop <&> fst
 
 runGame :: Chan Command -> Text -> Text -> GameM ()
 runGame channel timestamp user = do
@@ -196,7 +198,7 @@ runGame channel timestamp user = do
 
   let gameLoop = do
         cmd           <- liftIO $ readChan channel
-        (_, gameOver) <- stepAndSend (Just timestamp) cmd
+        (_, gameOver) <- stepAndSend (Just timestamp) user cmd
         if gameOver then endGame timestamp user else gameLoop
   gameLoop
 
@@ -207,7 +209,7 @@ endGame timestamp user = do
   let leaderboardPath = ctxLeaderboardFile context
   leaderboard <- liftIO (getLeaderboard leaderboardPath)
 
-  void $ stepAndSend (Just timestamp) (DisplayLeaderboard leaderboard)
+  void $ stepAndSend (Just timestamp) user (DisplayLeaderboard leaderboard)
 
   (depth, secs) <- lift getLeaderboardInfo
   currentTime   <- liftIO getCurrentTime
@@ -250,7 +252,7 @@ app = do
         let
           createGame = do
             gameChannel <- liftIO newChan
-            timestamp   <- initializeGame
+            timestamp   <- initializeGame user
             liftIO $ modifyIORef gameChannels (Map.insert timestamp gameChannel)
             runGame gameChannel timestamp user
 
