@@ -244,50 +244,6 @@ app = do
 
         void . liftIO . async . runRogue . runReaderT createGame $ context
 
-  -- (timestamp, _) <- do
-  --   stepAndSend Nothing Noop
-  -- msgThread <- liftIO . async $ wsConnect
-  --   (ctxSession context)
-  --   (ctxWSToken context)
-  --   (handleMsg timestamp channel userRef)
-  --  timerThread <- liftIO . async . forever $ do
-  --    threadDelay 1000000
-  --    writeChan channel (timestamp, IncrementTimer)
-  -- let
-  --   gameLoop = do
-  --     (timestamp', command ) <- liftIO $ readChan channel
-  --     (_         , gameOver) <- stepAndSend (Just timestamp') command
-  --     if gameOver
-  --       then do
-  --         let leaderboardPath = toString $ ctxLeaderboardFile context
-  --         leaderboard <- liftIO $ doesFileExist leaderboardPath >>= \case
-  --           True ->
-  --             readFileBS leaderboardPath
-  --               >>= maybe (die "Failed to read leaderboard file") pure
-  --               .   decodeStrict
-  --           False -> pure $ Leaderboard []
-  --         void $ stepAndSend (Just timestamp') (DisplayLeaderboard leaderboard)
-
-  --         (depth, secs) <- lift getLeaderboardInfo
-  --         currentTime   <- liftIO getCurrentTime
-  --         userName      <- liftIO $ readIORef userRef >>= maybe
-  --           (pure "a ghost?")
-  --           (getUserName (ctxSession context) (ctxAPIToken context))
-  --         let newLeaderboard = withLeaderboard
-  --               (<> [ LeaderboardEntry { leName  = userName
-  --                                      , leTime  = currentTime
-  --                                      , leDepth = depth
-  --                                      , leSecs  = secs
-  --                                      }
-  --                   ]
-  --               )
-  --               leaderboard
-  --         liftIO $ encodeFile leaderboardPath newLeaderboard
-
-  --         -- cancel msgThread
-  --         -- cancel timerThread
-  --       else gameLoop
-
   cancel wsThread
 
 main :: IO ()
