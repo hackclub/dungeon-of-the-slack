@@ -3,6 +3,7 @@
 {-# LANGUAGE NoImplicitPrelude  #-}
 {-# LANGUAGE OverloadedStrings  #-}
 {-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE ViewPatterns       #-}
 
 module Main
   ( main
@@ -168,11 +169,20 @@ handleMsg channel channelID msg = do
 
     SlashCommand _ u -> do
       writeChan channel $ NewGameEvent u
-      return $ SlashCommandRes "Starting a new game..." False
+      return $ SlashCommandRes "starting a new game..." False
 
     _ -> do
       putStrLn $ "Can't handle event: " <> show msg
       return NoRes
+
+
+getLeaderboard :: Text -> IO Leaderboard
+getLeaderboard (toString -> path) = doesFileExist path >>= \case
+  True ->
+    readFileBS path
+      >>= maybe (die "Failed to read leaderboard file...") pure
+      .   decodeStrict
+  False -> pure (Leaderboard [])
 
 
 initializeGame :: GameM Text
@@ -194,13 +204,8 @@ endGame :: Text -> Text -> GameM ()
 endGame timestamp user = do
   context <- ask
 
-  let leaderboardPath = toString $ ctxLeaderboardFile context
-  leaderboard <- liftIO $ doesFileExist leaderboardPath >>= \case
-    True ->
-      readFileBS leaderboardPath
-        >>= maybe (die "Failed to read leaderboard file") pure
-        .   decodeStrict
-    False -> pure $ Leaderboard []
+  let leaderboardPath = ctxLeaderboardFile context
+  leaderboard <- liftIO (getLeaderboard leaderboardPath)
 
   void $ stepAndSend (Just timestamp) (DisplayLeaderboard leaderboard)
 
@@ -217,7 +222,7 @@ endGame timestamp user = do
             ]
         )
         leaderboard
-  liftIO $ encodeFile leaderboardPath newLeaderboard
+  liftIO $ encodeFile (toString leaderboardPath) newLeaderboard
 
 
 app :: AppM ()
@@ -251,11 +256,23 @@ app = do
 
         void . liftIO . async . runRogue . runReaderT createGame $ context
 
-      NewMemberEvent user -> void . liftIO $ sendMessage
-        (ctxSession context)
-        (ctxAPIToken context)
-        (ctxChannelID context)
-        ("welcome <@" <> user <> ">...")
+      NewMemberEvent user -> void . liftIO $ do
+        leaderboardText' <-
+          getLeaderboard (ctxLeaderboardFile context)
+          >>= liftIO
+          .   leaderboardText
+        sendMessage
+          (ctxSession context)
+          (ctxAPIToken context)
+          (ctxChannelID context)
+          (  "hello <@"
+          <> user
+          <> ">\n\n\
+             \i am a small game about dungeon descension; i bear similarities to arcade and roguelike games\n\n\
+             \type the command `/rlnewgame` and a new game will await you\n\
+             \alternatively, you may explore my recesses: https://github.com/hackclub/rogue\n\n"
+          <> leaderboardText'
+          )
 
   cancel wsThread
 

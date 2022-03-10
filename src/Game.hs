@@ -25,6 +25,7 @@ module Game
   , Portal(..)
   , represent
   , populateWorld
+  , leaderboardText
   , getLeaderboardInfo
   , step
   , runRogue
@@ -704,18 +705,9 @@ globalSystemsPre = [clearMessage, displayIntro, incrementTurns]
 
 displayLeaderboard :: Command -> RogueM ()
 displayLeaderboard = \case
-  DisplayLeaderboard (Leaderboard entries) -> do
-    currentTime <- liftIO getCurrentTime
-    let oneWeek = secondsToNominalDiffTime 604800
-    appendMessage
-      $  "leaderboard:\n"
-      <> ( unlines
-         . map displayEntry
-         . take 10
-         . sortOn (\e -> Down (leDepth e, leSecs e))
-         . filter ((< oneWeek) . diffUTCTime currentTime . leTime)
-         )
-           entries
+  DisplayLeaderboard leaderboard -> do
+    displayed <- liftIO (leaderboardText leaderboard)
+    appendMessage displayed
   _ -> pure ()
  where
   displayEntry LeaderboardEntry {..} =
@@ -815,6 +807,23 @@ executeStep command = do
               (foldl' union [] members')
     )
   forM_ globalSystemsPost (\f -> f command)
+
+leaderboardText :: Leaderboard -> IO Text
+leaderboardText (Leaderboard entries) = do
+  currentTime <- liftIO getCurrentTime
+  let oneWeek = secondsToNominalDiffTime 604800
+  pure
+    $  "leaderboard:\n"
+    <> ( unlines
+       . map displayEntry
+       . take 10
+       . sortOn (\e -> Down (leDepth e, leSecs e))
+       . filter ((< oneWeek) . diffUTCTime currentTime . leTime)
+       )
+         entries
+ where
+  displayEntry LeaderboardEntry {..} =
+    leName <> ": depth " <> show leDepth <> ", " <> show leSecs <> " secs"
 
 getLeaderboardInfo :: RogueM (Int, Int)
 getLeaderboardInfo = do
