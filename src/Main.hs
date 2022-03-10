@@ -150,12 +150,18 @@ stepAndSend edit cmd = do
       return (timestamp, gameOver)
 
 
-data Event = CommandEvent Text Command | NewGameEvent Text
+data Event = CommandEvent Text Command
+           | NewGameEvent Text
+           | NewMemberEvent Text
 
-handleMsg :: Chan Event -> EventHandler IO
-handleMsg channel msg = do
+handleMsg :: Chan Event -> Text -> EventHandler IO
+handleMsg channel channelID msg = do
   putStrLn $ "Message from socket: " <> show msg
   case msg of
+    MemberJoin c u -> do
+      when (c == channelID) (writeChan channel (NewMemberEvent u))
+      return BasicRes
+
     ReactionAdd e m u -> do
       unless (u == rogueUserId)
              (writeChan channel $ CommandEvent m (fromReact e))
@@ -221,9 +227,10 @@ app = do
   gameChannels <- liftIO $ newIORef Map.empty
 
   context      <- ask
-  wsThread     <- liftIO . async $ wsConnect (ctxSession context)
-                                             (ctxWSToken context)
-                                             (handleMsg channel)
+  wsThread     <- liftIO . async $ wsConnect
+    (ctxSession context)
+    (ctxWSToken context)
+    (handleMsg channel (ctxChannelID context))
 
   void . forever $ do
     event <- liftIO $ readChan channel
@@ -234,6 +241,7 @@ app = do
         case gameChannelMay of
           Just gameChannel -> liftIO . writeChan gameChannel $ cmd
           Nothing          -> putStrLn "Message does not correspond to any game"
+
       NewGameEvent user -> do
         let
           createGame = do
@@ -243,6 +251,13 @@ app = do
             runGame gameChannel timestamp user
 
         void . liftIO . async . runRogue . runReaderT createGame $ context
+
+      NewMemberEvent user -> do
+        void . liftIO $ sendMessage (ctxSession context)
+                                    (ctxAPIToken context)
+                                    (ctxChannelID context)
+                                    ("welcome <@" <> user <> ">...")
+
 
   cancel wsThread
 
