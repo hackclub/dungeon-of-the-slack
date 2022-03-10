@@ -43,7 +43,6 @@ data Context = Context
   , ctxLeaderboardFile :: Text
   }
 
--- type AppM = ReaderT Context RogueM
 type AppM = ReaderT Context IO
 type GameM = ReaderT Context RogueM
 
@@ -245,7 +244,7 @@ app = do
       NewGameEvent user -> do
         let
           createGame = do
-            gameChannel <- liftIO $ newChan
+            gameChannel <- liftIO newChan
             timestamp   <- initializeGame
             liftIO $ modifyIORef gameChannels (Map.insert timestamp gameChannel)
             runGame gameChannel timestamp user
