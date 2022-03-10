@@ -74,8 +74,9 @@ data SocketEvent = SocketEvent
   deriving Show
 data SocketEventContent =
     Hello
-  | ReactionAdd { reactionName :: Text, reactionUser :: Text }
-  | SlashCommand { scText :: Text }
+  | MemberJoin { channelJoined :: Text, userJoined :: Text }
+  | ReactionAdd { reactionName :: Text, reactionMessage :: Text, reactionUser :: Text }
+  | SlashCommand { scText :: Text, scUser :: Text }
   | Unknown { unknownType :: Text, unknownFull :: Text }
     deriving Show
 
@@ -86,13 +87,23 @@ instance FromJSON SocketEvent where
       (case typeName of
         "hello"      -> return Hello
         "events_api" -> do
-          event <- (v .: "payload") >>= (.: "event")
-          name  <- event .: "reaction"
-          user  <- event .: "user"
-          return $ ReactionAdd name user
+          event             <- (v .: "payload") >>= (.: "event")
+          eventType :: Text <- event .: "type"
+          case eventType of
+            "member_joined_channel" -> do
+              channel <- event .: "channel"
+              user    <- event .: "user"
+              return $ MemberJoin channel user
+            "reaction_added" -> do
+              name <- event .: "reaction"
+              msg  <- event .: "item" >>= (.: "ts")
+              user <- event .: "user"
+              return $ ReactionAdd name msg user
+            _ -> return $ Unknown eventType (decodeUtf8 . encodePretty $ v)
         "slash_commands" -> do
           text <- (v .: "payload") >>= (.: "text")
-          return $ SlashCommand { scText = text }
+          user <- (v .: "payload") >>= (.: "user_id")
+          return $ SlashCommand { scText = text, scUser = user }
         _ -> do
           type' <- v .: "type"
           let content' = (decodeUtf8 . encodePretty) v

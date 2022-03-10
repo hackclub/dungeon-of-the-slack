@@ -664,15 +664,6 @@ systems =
     , action    = \_ e -> get e >>= \(HasHealth hp, Depth d) -> appendMessage
                     ("you have " <> show hp <> " hp (depth " <> show d <> ")")
     }
-  -- , def
-  --   { qualifier = [$(pb "IsPlayer")]
-  --   , action    = \_ _ -> do
-  --                   addRandomMessage <- (< (0.1 :: Double)) <$> lift getRandom
-  --                   when addRandomMessage
-  --                     $   (lift . randomChoice)
-  --                           ["placeholder msg 1", "placeholder msg 2"]
-  --                     >>= appendMessage
-  --   }
   -- descension
   , descendStaircase
   ]

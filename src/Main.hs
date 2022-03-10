@@ -29,6 +29,7 @@ import           UnliftIO.Concurrent            ( threadDelay )
 
 import           Control.Concurrent.Chan
 import           Data.List.Split                ( chunksOf )
+import qualified Data.Map                      as Map
 import           Data.Maybe                     ( fromJust )
 import           Data.Time                      ( getCurrentTime )
 import           System.Environment             ( lookupEnv )
@@ -42,7 +43,9 @@ data Context = Context
   , ctxLeaderboardFile :: Text
   }
 
-type AppM = ReaderT Context RogueM
+-- type AppM = ReaderT Context RogueM
+type AppM = ReaderT Context IO
+type GameM = ReaderT Context RogueM
 
 
 deriving instance Generic LeaderboardEntry
@@ -59,7 +62,7 @@ instance ToJSON Leaderboard
 rogueUserId :: Text
 rogueUserId = "U02MTTW1XND"
 
-addReacts :: Text -> AppM ()
+addReacts :: Text -> GameM ()
 addReacts timestamp = do
   Context { ctxSession = session, ctxAPIToken = token, ctxChannelID = channelID } <-
     ask
@@ -126,7 +129,7 @@ renderGrid es =
     let [a, b, c, d] = l
     return $ a && b && not (c && d)
 
-stepAndSend :: Maybe Text -> Command -> AppM (Text, Bool)
+stepAndSend :: Maybe Text -> Command -> GameM (Text, Bool)
 stepAndSend edit cmd = do
   Context { ctxSession = session, ctxAPIToken = token, ctxChannelID = channelID } <-
     ask
@@ -146,68 +149,146 @@ stepAndSend edit cmd = do
 
       return (timestamp, gameOver)
 
-handleMsg
-  :: Text -> Chan (Text, Command) -> IORef (Maybe Text) -> EventHandler IO
-handleMsg timestamp channel userRef msg = do
+
+data Event = CommandEvent Text Command | NewGameEvent Text
+
+handleMsg :: Chan Event -> EventHandler IO
+handleMsg channel msg = do
   putStrLn $ "Message from socket: " <> show msg
   case msg of
-    ReactionAdd e u -> do
-      unless (u == rogueUserId) $ do
-        writeChan channel (timestamp, fromReact e)
-        liftIO $ writeIORef userRef (Just u)
+    ReactionAdd e m u -> do
+      unless (u == rogueUserId)
+             (writeChan channel $ CommandEvent m (fromReact e))
       return BasicRes
+
+    SlashCommand _ u -> do
+      writeChan channel $ NewGameEvent u
+      return $ SlashCommandRes "Starting a new game..." False
 
     _ -> do
       putStrLn $ "Can't handle event: " <> show msg
       return NoRes
 
-app :: Chan (Text, Command) -> IORef (Maybe Text) -> AppM ()
-app channel userRef = do
-  context        <- ask
-  (timestamp, _) <- do
-    stepAndSend Nothing Noop
-  msgThread <- liftIO . async $ wsConnect
-    (ctxSession context)
-    (ctxWSToken context)
-    (handleMsg timestamp channel userRef)
-  timerThread <- liftIO . async . forever $ do
+
+initializeGame :: GameM Text
+initializeGame = stepAndSend Nothing Noop <&> fst
+
+runGame :: Chan Command -> Text -> Text -> GameM ()
+runGame channel timestamp user = do
+  void . liftIO . async . forever $ do
     threadDelay 1000000
-    writeChan channel (timestamp, IncrementTimer)
-  let
-    gameLoop = do
-      (timestamp', command ) <- liftIO $ readChan channel
-      (_         , gameOver) <- stepAndSend (Just timestamp') command
-      if gameOver
-        then do
-          let leaderboardPath = toString $ ctxLeaderboardFile context
-          leaderboard <- liftIO $ doesFileExist leaderboardPath >>= \case
-            True ->
-              readFileBS leaderboardPath
-                >>= maybe (die "Failed to read leaderboard file") pure
-                .   decodeStrict
-            False -> pure $ Leaderboard []
-          void $ stepAndSend (Just timestamp') (DisplayLeaderboard leaderboard)
+    writeChan channel IncrementTimer
 
-          (depth, secs) <- lift getLeaderboardInfo
-          currentTime   <- liftIO getCurrentTime
-          userName      <- liftIO $ readIORef userRef >>= maybe
-            (pure "a ghost?")
-            (getUserName (ctxSession context) (ctxAPIToken context))
-          let newLeaderboard = withLeaderboard
-                (<> [ LeaderboardEntry { leName  = userName
-                                       , leTime  = currentTime
-                                       , leDepth = depth
-                                       , leSecs  = secs
-                                       }
-                    ]
-                )
-                leaderboard
-          liftIO $ encodeFile leaderboardPath newLeaderboard
-
-          cancel msgThread
-          cancel timerThread
-        else gameLoop
+  let gameLoop = do
+        cmd           <- liftIO $ readChan channel
+        (_, gameOver) <- stepAndSend (Just timestamp) cmd
+        if gameOver then endGame timestamp user else gameLoop
   gameLoop
+
+endGame :: Text -> Text -> GameM ()
+endGame timestamp user = do
+  context <- ask
+
+  let leaderboardPath = toString $ ctxLeaderboardFile context
+  leaderboard <- liftIO $ doesFileExist leaderboardPath >>= \case
+    True ->
+      readFileBS leaderboardPath
+        >>= maybe (die "Failed to read leaderboard file") pure
+        .   decodeStrict
+    False -> pure $ Leaderboard []
+
+  void $ stepAndSend (Just timestamp) (DisplayLeaderboard leaderboard)
+
+  (depth, secs) <- lift getLeaderboardInfo
+  currentTime   <- liftIO getCurrentTime
+  userName      <- liftIO
+    $ getUserName (ctxSession context) (ctxAPIToken context) user
+  let newLeaderboard = withLeaderboard
+        (<> [ LeaderboardEntry { leName  = userName
+                               , leTime  = currentTime
+                               , leDepth = depth
+                               , leSecs  = secs
+                               }
+            ]
+        )
+        leaderboard
+  liftIO $ encodeFile leaderboardPath newLeaderboard
+
+
+app :: AppM ()
+app = do
+  channel      <- liftIO newChan
+  gameChannels <- liftIO $ newIORef Map.empty
+
+  context      <- ask
+  wsThread     <- liftIO . async $ wsConnect (ctxSession context)
+                                             (ctxWSToken context)
+                                             (handleMsg channel)
+
+  void . forever $ do
+    event <- liftIO $ readChan channel
+    case event of
+      CommandEvent timestamp cmd -> do
+        gameChannelMay <- liftIO (readIORef gameChannels)
+          <&> Map.lookup timestamp
+        case gameChannelMay of
+          Just gameChannel -> liftIO . writeChan gameChannel $ cmd
+          Nothing          -> putStrLn "Message does not correspond to any game"
+      NewGameEvent user -> do
+        let
+          createGame = do
+            gameChannel <- liftIO $ newChan
+            timestamp   <- initializeGame
+            liftIO $ modifyIORef gameChannels (Map.insert timestamp gameChannel)
+            runGame gameChannel timestamp user
+
+        void . liftIO . async . runRogue . runReaderT createGame $ context
+
+  -- (timestamp, _) <- do
+  --   stepAndSend Nothing Noop
+  -- msgThread <- liftIO . async $ wsConnect
+  --   (ctxSession context)
+  --   (ctxWSToken context)
+  --   (handleMsg timestamp channel userRef)
+  --  timerThread <- liftIO . async . forever $ do
+  --    threadDelay 1000000
+  --    writeChan channel (timestamp, IncrementTimer)
+  -- let
+  --   gameLoop = do
+  --     (timestamp', command ) <- liftIO $ readChan channel
+  --     (_         , gameOver) <- stepAndSend (Just timestamp') command
+  --     if gameOver
+  --       then do
+  --         let leaderboardPath = toString $ ctxLeaderboardFile context
+  --         leaderboard <- liftIO $ doesFileExist leaderboardPath >>= \case
+  --           True ->
+  --             readFileBS leaderboardPath
+  --               >>= maybe (die "Failed to read leaderboard file") pure
+  --               .   decodeStrict
+  --           False -> pure $ Leaderboard []
+  --         void $ stepAndSend (Just timestamp') (DisplayLeaderboard leaderboard)
+
+  --         (depth, secs) <- lift getLeaderboardInfo
+  --         currentTime   <- liftIO getCurrentTime
+  --         userName      <- liftIO $ readIORef userRef >>= maybe
+  --           (pure "a ghost?")
+  --           (getUserName (ctxSession context) (ctxAPIToken context))
+  --         let newLeaderboard = withLeaderboard
+  --               (<> [ LeaderboardEntry { leName  = userName
+  --                                      , leTime  = currentTime
+  --                                      , leDepth = depth
+  --                                      , leSecs  = secs
+  --                                      }
+  --                   ]
+  --               )
+  --               leaderboard
+  --         liftIO $ encodeFile leaderboardPath newLeaderboard
+
+  --         -- cancel msgThread
+  --         -- cancel timerThread
+  --       else gameLoop
+
+  cancel wsThread
 
 main :: IO ()
 main = do
@@ -229,10 +310,7 @@ main = do
                             , ctxChannelID       = channelID
                             , ctxLeaderboardFile = lf
                             }
-      channel    <- newChan
-      latestUser <- newIORef Nothing
-      forever $ runRogue (runReaderT (app channel latestUser) context)
-
+      runReaderT app context
     _ ->
       void
         .  die
