@@ -258,7 +258,6 @@ app = do
         (ctxChannelID context)
         ("welcome <@" <> user <> ">...")
 
-
   cancel wsThread
 
 main :: IO ()
