@@ -252,11 +252,11 @@ app = do
 
         void . liftIO . async . runRogue . runReaderT createGame $ context
 
-      NewMemberEvent user -> do
-        void . liftIO $ sendMessage (ctxSession context)
-                                    (ctxAPIToken context)
-                                    (ctxChannelID context)
-                                    ("welcome <@" <> user <> ">...")
+      NewMemberEvent user -> void . liftIO $ sendMessage
+        (ctxSession context)
+        (ctxAPIToken context)
+        (ctxChannelID context)
+        ("welcome <@" <> user <> ">...")
 
 
   cancel wsThread
