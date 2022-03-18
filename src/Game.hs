@@ -150,7 +150,7 @@ defComponent "IsWall" [] ''Map
 
 -- objects
 
-data Portal = Blue | Orange deriving (Eq, Show) -- TODO Show for debugging
+data Portal = Blue | Orange deriving Eq
 defComponent "IsFire" [] ''Map
 defComponent "IsPortal"
   [("portalType", mkType ''Portal [])]
@@ -423,6 +423,13 @@ populateWorld existingPlayer = do
     Just path -> unless
       (length path > minPathLength && length path < maxPathLength)
       tryAgain
+
+  -- i'm evil and horrible
+  entities <- members (Proxy :: Proxy HasLocation)
+  forM_ entities
+    $ (\entity ->
+        represent entity >>= \repr -> when (repr == ErrorTile) (delete entity)
+      )
  where
   populateWorld' = do
     difficulty <- getDifficulty
@@ -464,7 +471,6 @@ portalReplace (x, y) = do
       if (x, y) == (x', y') then Just p else acc
     )
     Nothing
-  traceM $ "portalReplace: " <> show (x, y) <> " -> " <> show portalHere
   case portalHere of
     Just Blue ->
       cfold

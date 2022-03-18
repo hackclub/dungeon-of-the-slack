@@ -10,6 +10,7 @@ module Game.TH
   , localComponentNames
   , componentNames
   , mkDelete
+  , mkListComponents
   , pb
   ) where
 
@@ -78,6 +79,18 @@ mkDelete compNames = (: []) <$> do
                   ) comps
   funD (mkName "delete")
        [clause [varP $ mkName "entity"] (normalB $ doE stmts) []]
+
+-- FOR DEBUGGING
+mkListComponents :: Q [Dec]
+mkListComponents = (: []) <$> do
+  let comps = map (\c -> (conT c, (litE . stringL . nameBase) c)) localComponentNames
+      stmts = map (\(ct, cn) -> noBindS
+                    [e|
+                      whenM (exists entity (Proxy :: Proxy $ct)) $
+                        liftIO $ putStrLn ("Component " <> $cn)
+                    |]
+                  ) comps
+  funD (mkName "listComponents") [clause [varP $ mkName "entity"] (normalB $ doE stmts) []]
 
 
 pb :: String -> Q Exp
