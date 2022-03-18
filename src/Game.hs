@@ -150,7 +150,7 @@ defComponent "IsWall" [] ''Map
 
 -- objects
 
-data Portal = In | Out deriving Eq
+data Portal = Blue | Orange deriving (Eq, Show) -- TODO Show for debugging
 defComponent "IsFire" [] ''Map
 defComponent "IsPortal"
   [("portalType", mkType ''Portal [])]
@@ -433,7 +433,7 @@ populateWorld existingPlayer = do
     replicateM_ enemyCount
       $ mkEntityOnEmpty_ [C CanMove, C (HasHealth 3), C IsEvil]
     replicateM_ itemCount $ randomItemComponents >>= mkEntityOnEmpty_
-    forM_ [C (IsPortal In), C (IsPortal Out)] $ mkEntityOnEmpty_ . (: [])
+    forM_ [C (IsPortal Blue), C (IsPortal Orange)] $ mkEntityOnEmpty_ . (: [])
     staircase <- mkEntityOnEmpty [C IsStaircase]
     player    <- case existingPlayer of
       Just player -> pure player
@@ -459,20 +459,28 @@ getNeighbors (x, y) =
 
 portalReplace :: (Int, Int) -> RogueM (Int, Int)
 portalReplace (x, y) = do
-  portalAt <- cfold
-    (\found (HasLocation x' y', IsPortal p) ->
-      found || (p == In && (x, y) == (x', y'))
+  portalHere <- cfold
+    (\acc (HasLocation x' y', IsPortal p) ->
+      if (x, y) == (x', y') then Just p else acc
     )
-    False
-  (if portalAt
-      then do
-        cfold
-          (\loc (HasLocation x' y', IsPortal p) ->
-            if p == Out then (x', y') else loc
+    Nothing
+  traceM $ "portalReplace: " <> show (x, y) <> " -> " <> show portalHere
+  case portalHere of
+    Just Blue ->
+      cfold
+          (\acc (HasLocation x' y', IsPortal p) ->
+            if p == Orange then Just (x', y') else acc
           )
-      else pure
-    )
-    (x, y)
+          Nothing
+        <&> fromMaybe (x, y)
+    Just Orange ->
+      cfold
+          (\acc (HasLocation x' y', IsPortal p) ->
+            if p == Blue then Just (x', y') else acc
+          )
+          Nothing
+        <&> fromMaybe (x, y)
+    Nothing -> pure (x, y)
 
 getNeighborsPortal :: (Int, Int) -> RogueM (HashSet (Int, Int))
 getNeighborsPortal =
@@ -709,9 +717,6 @@ displayLeaderboard = \case
     displayed <- liftIO (leaderboardText leaderboard)
     appendMessage displayed
   _ -> pure ()
- where
-  displayEntry LeaderboardEntry {..} =
-    leName <> ": depth " <> show leDepth <> ", " <> show leSecs <> " secs"
 
 incrementSecs :: Command -> RogueM ()
 incrementSecs = \case

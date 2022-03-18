@@ -1,2 +1,4 @@
 shell.nix
 .hie/
+.stack-work/
+*.json
