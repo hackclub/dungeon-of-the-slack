@@ -4,10 +4,11 @@ _You find yourself in the..._
 
 ## Dungeon of the Slack
 
-...is a rogue-like dungeon crawler built into the Hack Club Slack.
+...is a rogue-like dungeon arcade game built into the Hack Club Slack.
 
-a small arcade game with roguelike elements, playable over slack
-will serve as a more approachable way for new hack club members to engage.
+members of the slack can join #slacking-in-the-dungeon to try it themselves.
+
+You can start a game in that channel by running `/rogue-start`
 
 ## contribution
 
