@@ -88,18 +88,17 @@ fromReact = \case
   "tw_skull"       -> Die
   _                -> Noop
 
-renderGrid :: EntityGrid -> RogueM Text
+-- renderGrid is a mess! i'm quite aware
+renderGrid :: TileGrid -> RogueM Text
 renderGrid es =
   mapM fromCoord coordMatrix <&> fromString . concat . intercalate ["\n"] . m2l
  where
   coordMatrix = (l2m . chunksOf matrixSize)
     [ (x, y) | y <- [0 .. matrixSize - 1], x <- [0 .. matrixSize - 1] ]
 
-  fromCoord (x, y) = do
-    vertical' <- vertical (x, y)
-    mapM represent (mget x y es) <&> fromEntityRepr vertical'
+  fromCoord (x, y) = fromEntityRepr (vertical (x, y)) (mget x y es)
 
-  fromEntityRepr vertical' = \case
+  fromEntityRepr vertical' = pure . \case
     Just WallTile ->
       if vertical' then ":rogue__wall_vert:" else ":rogue__wall_horiz:"
     Just DoorTile ->
@@ -114,20 +113,18 @@ renderGrid es =
     Just ErrorTile           -> ":rogue__default:"
     Nothing                  -> ":rogue__blank:"
 
-  isWallOrDoor' e = represent e <&> ((== WallTile) ||$ (== DoorTile))
-  isWallOrDoor x' y' = maybe (pure False) isWallOrDoor' $ mget x' y' es
-  isSomething x' y' = pure . isJust $ mget x' y' es
+  isWallOrDoor' = (== WallTile) ||$ (== DoorTile)
+  isWallOrDoor x' y' = maybe False isWallOrDoor' $ mget x' y' es
+  isSomething x' y' = isJust $ mget x' y' es
   safeInc a = if a < matrixSize - 1 then a + 1 else a
   safeDec a = if a > 0 then a - 1 else a
-  vertical (x, y) = do
-    l <- sequence
+  vertical (x, y) = a && b && not (c && d)   where
+    [a, b, c, d] =
       [ isSomething x (safeDec y)
       , isSomething x (safeInc y)
       , isWallOrDoor (safeDec x) y
       , isWallOrDoor (safeInc x) y
       ]
-    let [a, b, c, d] = l
-    return $ a && b && not (c && d)
 
 stepAndSend :: Maybe Text -> Text -> Command -> GameM (Text, Bool)
 stepAndSend edit user cmd = do

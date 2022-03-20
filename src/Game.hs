@@ -15,7 +15,7 @@
 
 module Game
   ( RogueM
-  , EntityGrid
+  , TileGrid
   , Leaderboard(..)
   , LeaderboardEntry(..)
   , withLeaderboard
@@ -226,9 +226,13 @@ mkDelete localComponentNames
 -- map
 
 type EntityGrid = Matrix (Maybe Entity)
+type TileGrid = Matrix (Maybe Tile)
 
-emptyMap :: EntityGrid
-emptyMap = (Matrix . FVec.replicate . FVec.replicate) Nothing
+emptyMapE :: EntityGrid
+emptyMapE = (Matrix . FVec.replicate . FVec.replicate) Nothing
+
+emptyMapT :: TileGrid
+emptyMapT = (Matrix . FVec.replicate . FVec.replicate) Nothing
 
 maxCoord :: Int
 maxCoord = matrixSize - 1
@@ -789,9 +793,19 @@ compareEntities e1 e2 = do
     (_, _, _, _, False, True) -> pure LT
     _ -> pure EQ
 
-getGrid :: RogueM EntityGrid
-getGrid =
-  (members (Proxy :: Proxy HasLocation) >>= mapM get) >>= foldlM go emptyMap
+getGrid :: RogueM TileGrid
+getGrid = get global >>= \case
+  InGameStage Intro -> pure $ compose
+    [ mset x y (Just ErrorTile)
+    | x <- [0 .. matrixSize]
+    , y <- [0 .. matrixSize]
+    ]
+    emptyMapT
+  InGameStage _ ->
+    members (Proxy :: Proxy HasLocation)
+      >>= mapM get
+      >>= foldlM go emptyMapE
+      >>= mapM (maybe (pure Nothing) (represent >=> pure . Just))
  where
   go grid (entity, entityLoc) = do
     comparison <- case mget (posX entityLoc) (posY entityLoc) grid of
@@ -843,7 +857,7 @@ getLeaderboardInfo = do
 
 step
   :: Command
-  -> (EntityGrid -> RogueM a)
+  -> (TileGrid -> RogueM a)
   -> (Message -> RogueM b)
   -> RogueM (a, b, Bool)
 step command renderGrid renderMessage = do
