@@ -1,0 +1,30 @@
+display_information:
+  name: dungeon of the slackers
+features:
+  bot_user:
+    display_name: dungeon of the slackers
+    always_online: true
+  slash_commands:
+    - command: /rogue-start
+      description: start a new game
+      should_escape: false
+oauth_config:
+  scopes:
+    bot:
+      - channels:read
+      - chat:write
+      - groups:read
+      - reactions:read
+      - reactions:write
+      - users:read
+      - commands
+settings:
+  event_subscriptions:
+    bot_events:
+      - member_joined_channel
+      - reaction_added
+  interactivity:
+    is_enabled: true
+  org_deploy_enabled: false
+  socket_mode_enabled: true
+  token_rotation_enabled: false
