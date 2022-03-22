@@ -1,6 +1,6 @@
 _While wandering through a forest, you find the entrance to the..._
 
-![dungeon of the slack](https://cloud-omtzct4qa-hack-club-bot.vercel.app/0untitled_artwork_2.png)
+![dungeon of the slack](https://cloud-9adijwjyk-hack-club-bot.vercel.app/0untitled_artwork_4.png)
 
 ## Dungeon of the Slack
 
