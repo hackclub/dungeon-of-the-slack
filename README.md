@@ -1,4 +1,4 @@
-_You find yourself in the..._
+_While wandering through a forest, you find the entrance to the..._
 
 ![dungeon of the slack](https://cloud-omtzct4qa-hack-club-bot.vercel.app/0untitled_artwork_2.png)
 
@@ -9,6 +9,8 @@ _You find yourself in the..._
 members of the slack can join #slacking-in-the-dungeon to try it themselves.
 
 You can start a game in that channel by running `/rogue-start`
+
+Leaderboard is at `/rogue-leaderboard`, or found on the app home.
 
 ## contribution
 
