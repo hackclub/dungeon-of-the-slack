@@ -1,5 +1,16 @@
 display_information:
   name: dungeon of the slackers
+  description: "HACK and slash your way in #dugeon"
+  background_color: "#363636"
+  long_description: "what a dark dungeon. you wonder how far you'll make it...\r
+
+    \r
+
+    Head to #dungeon and start a game with /dungeon-start.\r
+
+    \r
+
+    Fully open-source! You can read the code/contribute at github.com/hackclub/rogue."
 features:
   bot_user:
     display_name: dungeon of the slackers
