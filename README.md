@@ -10,7 +10,7 @@ members of the slack can join #slacking-in-the-dungeon to try it themselves.
 
 You can start a game in that channel by running `/rogue-start`
 
-Leaderboard is at `/rogue-leaderboard`, or found on the app home.
+The leaderboard will be posted at the end of each game.
 
 ## contribution
 
