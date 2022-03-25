@@ -4,6 +4,7 @@
 {-# LANGUAGE OverloadedStrings   #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE StrictData          #-}
+{-# LANGUAGE ViewPatterns        #-}
 
 module Slack
   ( wsConnect
@@ -77,6 +78,7 @@ data SocketEventContent =
   | MemberJoin { channelJoined :: Text, userJoined :: Text }
   | ReactionAdd { reactionName :: Text, reactionMessage :: Text, reactionUser :: Text }
   | SlashCommand { scText :: Text, scUser :: Text }
+  | Disconnect
   | Unknown { unknownType :: Text, unknownFull :: Text }
     deriving Show
 
@@ -104,6 +106,7 @@ instance FromJSON SocketEvent where
           text <- (v .: "payload") >>= (.: "text")
           user <- (v .: "payload") >>= (.: "user_id")
           return $ SlashCommand { scText = text, scUser = user }
+        "disconnect" -> return Disconnect
         _ -> do
           type' <- v .: "type"
           let content' = (decodeUtf8 . encodePretty) v
@@ -149,16 +152,22 @@ type EventHandler m = SocketEventContent -> m SocketEventResContent
 wsClient :: EventHandler IO -> Connection -> IO ()
 wsClient handleMsg conn = do
   putStrLn "Connected!"
-  forever $ receiveData conn >>= \msg ->
-    liftIO
-      . maybe
-          (void . die $ "Failed to parse JSON: " <> toString (msg :: Text))
-          (\se ->
-            maybe (return ()) (socketLoop se) . inEnvId $ (se :: SocketEvent)
-          )
-      . decode
-      . encodeUtf8
-      $ msg
+  let msgLoop = do
+        msgRaw <- receiveData conn
+        let msg = decode msgRaw
+        let isDisconnect = case msg of
+                             Just (content -> Disconnect) -> True
+                             _                            -> False
+        unless isDisconnect $ do
+          liftIO
+            . maybe
+                (putTextLn $ "Failed to parse JSON: " <> decodeUtf8 msgRaw)
+                (\se ->
+                  maybe (return ()) (socketLoop se) . inEnvId $ (se :: SocketEvent)
+                )
+            $ msg
+          msgLoop
+  msgLoop
  where
   socketLoop se id_ = do
     res <- handleMsg (content se)
@@ -170,7 +179,7 @@ wsClient handleMsg conn = do
 
 
 wsConnect :: Session -> Text -> EventHandler IO -> IO ()
-wsConnect session wsToken handle = do
+wsConnect session wsToken handle = forever $ do
   getURLRes <- liftIO $ asJSON =<< S.postWith
     (defaults & header "Authorization" .~ ["Bearer " <> encodeUtf8 wsToken])
     session
