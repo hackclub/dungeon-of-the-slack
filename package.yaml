@@ -20,6 +20,7 @@ dependencies:
   - lens
   - megaparsec
   - MonadRandom
+  - scotty
   - split
   - template-haskell
   - time
