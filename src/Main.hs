@@ -9,7 +9,7 @@ module Main
   ( main
   ) where
 
-import           Relude
+import           Relude hiding ( get )
 
 import           Game
 import           Slack
@@ -34,6 +34,7 @@ import qualified Data.Map                      as Map
 import           Data.Maybe                     ( fromJust )
 import           Data.Time                      ( getCurrentTime )
 import           System.Environment             ( lookupEnv )
+import           Web.Scotty
 
 
 data Context = Context
@@ -282,11 +283,14 @@ main = do
         , "SLACK_WS_TOKEN"
         , "RL_CHANNEL_NAME"
         , "LEADERBOARD_FILE"
+        , "PORT"
         ]
   envVars <- mapM lookupEnv envVarNames
 
-  case map (fmap fromString) envVars of
-    [Just at, Just wst, Just cn, Just lf] -> do
+  case map (fmap fromString) envVars :: [Maybe Text] of
+    [Just at, Just wst, Just cn, Just lf, Just ((readMaybe . toString) -> Just port)] -> do
+      void . async . scotty port . get "/" . html $ "it's up..."
+
       session   <- S.newSession
       channelID <- getChannelID session at cn
       let context = Context { ctxSession         = session
