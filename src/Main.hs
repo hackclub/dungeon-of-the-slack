@@ -269,7 +269,7 @@ app = do
           <> user
           <> ">\n\n\
              \i am a small game about dungeon descension; i bear similarities to arcade and roguelike games\n\n\
-             \type the command `/rlnewgame` and a new game will await you\n\
+             \type the command `/rogue-start` and a new game will await you\n\
              \alternatively, you may explore my recesses: https://github.com/hackclub/rogue\n\n"
           <> leaderboardText'
           )
@@ -292,7 +292,9 @@ main = do
       void . async . scotty port . get "/" . html $ "it's up..."
 
       session   <- S.newSession
-      channelID <- getChannelID session at cn
+      -- channelID <- getChannelID session at cn
+      -- lol
+      let channelID = "C038UNLRGSY"
       let context = Context { ctxSession         = session
                             , ctxAPIToken        = at
                             , ctxWSToken         = wst
