@@ -706,7 +706,7 @@ displayIntro _ = get global >>= \case
   _                      -> pure ()
  where
   introMessage
-    = "welcome to [placeholder name]\n\n\
+    = "welcome to dungeon of the slack\n\n\
       \react with :tw_arrow_up::tw_arrow_right::tw_arrow_down::tw_arrow_left: to move\n\
       \react with :tw_hourglass: to wait\n\
       \react with :tw_tea: to drink a potion\n\
