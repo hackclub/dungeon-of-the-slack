@@ -1,3 +1,5 @@
+_⚠️ GitHub & Heroku have turned off their integration while investigating a [breach](https://github.blog/2022-04-15-security-alert-stolen-oauth-user-tokens/), so changes will not automatically deploy after pushing to `main`. If you have access to do so, please [push your changes to the `main` branch of the Heroku git remote](https://devcenter.heroku.com/articles/git) once your PR is merged. Otherwise, please mention it in the PR and assign [@cosmicoptima](https://github.com/cosmicoptima) for review._
+
 _While wandering through a forest, you find the entrance to the..._
 
 ![dungeon of the slack](https://cloud-9adijwjyk-hack-club-bot.vercel.app/0untitled_artwork_4.png)
